@@ -32,7 +32,10 @@ export interface AccountView {
   kycStatus: string;
   kycNote: string | null;
   country: number | null;
-  wallets: Array<{ address: string; verified: boolean; onchainid: string | null }>;
+  /** Plain addresses — the shape both portals were built against (Express
+      parity). Per-wallet verification lives on `walletDetails`. */
+  wallets: string[];
+  walletDetails: Array<{ address: string; verified: boolean; onchainid: string | null }>;
   /** Where the person is in the flow, and what unblocks them next. */
   step: OnboardingStep;
   nextAction: string;
@@ -250,7 +253,8 @@ export class AccountService {
          they need in order to fix and re-submit. */
       kycNote: account.kycNote,
       country: account.country,
-      wallets: wallets.map((w) => ({
+      wallets: wallets.map((w) => w.wallet),
+      walletDetails: wallets.map((w) => ({
         address: w.wallet,
         verified: w.verified,
         onchainid: w.onchainid,
