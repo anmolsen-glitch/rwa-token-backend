@@ -94,6 +94,31 @@ async function bootstrap(): Promise<void> {
   });
 
   /*
+   * POST /api/uploads carries a base64 image — up to UPLOAD_MAX_BYTES of
+   * binary is ~4/3 that as JSON, far over the global 1 MB body limit. Raising
+   * the limit for THIS route only (and tightening its rate limit) is done via
+   * an onRoute hook because both knobs are route options: registering a
+   * bigger JSON body parser instead would collide with @fastify/http-proxy
+   * (see the empty-body note above), and the global limit must not move for
+   * everyone else. The hook must be added before Nest registers its routes,
+   * which happens inside listen().
+   */
+  const uploadBodyLimit = Math.ceil((config.get('UPLOAD_MAX_BYTES') * 4) / 3) + 64 * 1024;
+  app.getHttpAdapter().getInstance().addHook('onRoute', (route) => {
+    const methods = Array.isArray(route.method) ? route.method : [route.method];
+    if (route.url === '/api/uploads' && methods.includes('POST')) {
+      route.bodyLimit = uploadBodyLimit;
+      route.config = {
+        ...(route.config ?? {}),
+        rateLimit: {
+          max: config.get('UPLOAD_RATE_LIMIT_MAX'),
+          timeWindow: config.get('RATE_LIMIT_WINDOW_MS'),
+        },
+      };
+    }
+  });
+
+  /*
    * Capture the RAW body for webhook signature verification. Fastify parses
    * JSON before the handler runs, and re-serialising it can reorder keys or
    * change spacing — which breaks every provider HMAC. The signature must be

@@ -161,6 +161,20 @@ export const EnvSchema = z.object({
 
   DOCUMENT_MAX_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
 
+  /* Image uploads (offering photos). Public + rate-limited: a prospective
+     seller uploads before applying, so there is no session to require. Local
+     disk is the seam, same as documents — S3 is a new backend, not a call-site
+     change. Base URL is what the returned image links are built from; it must
+     be the FRONT DOOR (this app), not the legacy one. */
+  PUBLIC_BASE_URL: z
+    .string()
+    .url()
+    .default('http://localhost:4100')
+    .transform((s) => s.replace(/\/+$/, '')),
+  UPLOADS_DIR: z.string().default('./uploads'),
+  UPLOAD_MAX_BYTES: z.coerce.number().int().positive().default(6 * 1024 * 1024),
+  UPLOAD_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(20),
+
   /* Email seam. 'mock' logs the body (including one-time codes) and is refused
      in production by MailModule. */
   MAIL_PROVIDER: z.enum(['mock', 'ses', 'sendgrid']).default('mock'),

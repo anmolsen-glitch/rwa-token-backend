@@ -55,6 +55,7 @@ import { IndexerModule } from '@modules/indexer/indexer.module';
 import { TokensModule } from '@modules/tokens/tokens.module';
 import { OperationsModule } from '@modules/operations/operations.module';
 import { SubscriptionsModule } from '@modules/subscriptions/subscriptions.module';
+import { UploadsModule } from '@modules/uploads/uploads.module';
 
 @Module({
   imports: [
@@ -111,6 +112,7 @@ import { SubscriptionsModule } from '@modules/subscriptions/subscriptions.module
     TokensModule,
     OperationsModule,
     SubscriptionsModule,
+    UploadsModule,
   ],
   providers: [
     { provide: APP_PIPE, useClass: ZodValidationPipe },
