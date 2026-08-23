@@ -71,13 +71,26 @@ Two port gaps found and fixed along the way, both live-verified:
   exists), and the admin health tile now calls `/api/health` (`/health` had
   404'd since cutover).
 
+**Post-cutover parity repair (2026-08-23, later the same day).** The cutover
+verified route PATHS, not response SHAPES — the admin panel went blank after
+login and investor login 500'd. Fixed: the investor BFF's `.env.local` still
+pointed at :4000; both frontends got a one-place adapter for Nest's `{ items }`
++ camelCase responses; the Express `enrich()` offering view was ported
+(`offering-view.service.ts`) since both portals render its computed stats; the
+issuers DTOs had been silently STRIPPING `spvId`/`spvType`/`details`; the full
+SPV detail panel and the investor admin drawer were ported; and an AuthGuard
+ordering bug 403'd public signup/login whenever a stale session cookie was
+present (localhost portals share cookies across ports). 336 tests green; both
+portals verified in the browser. Lesson: "migrated" must mean same SHAPE —
+verify responses against the consuming UI, not the route table.
+
 ### Running it
 
 ```bash
 cd rwa-token-backend-nest && npm run build && node dist/main.js   # :4100
 cd rwa-token-backend      && npm run dev                          # :4000 (optional fallback)
 npm run db:migrate     # applies migrations/*.sql in order
-npx vitest run         # 335 passing, 2 skipped
+npx vitest run         # 336 passing, 2 skipped
 ```
 
 ---
