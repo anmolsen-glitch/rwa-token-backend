@@ -1,7 +1,7 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { TokensModule } from '@modules/tokens/tokens.module';
 import { OfferingsModule } from '@modules/offerings/offerings.module';
-import { SubscriptionsController } from './subscriptions.controller';
+import { AdminSubscriptionsController, SubscriptionsController } from './subscriptions.controller';
 import { SubscriptionsRepository } from './subscriptions.repository';
 import { SubscriptionsService } from './subscriptions.service';
 import { SweeperService } from './sweeper.service';
@@ -14,7 +14,7 @@ import { SweeperService } from './sweeper.service';
    * undefined at scan time.
    */
   imports: [TokensModule, forwardRef(() => OfferingsModule)],
-  controllers: [SubscriptionsController],
+  controllers: [SubscriptionsController, AdminSubscriptionsController],
   providers: [SubscriptionsService, SubscriptionsRepository, SweeperService],
   exports: [SubscriptionsService],
 })

@@ -358,6 +358,17 @@ export class SubscriptionsRepository {
     };
   }
 
+  /**
+   * Recent orders for back-office reconciliation. No WHERE clause on purpose:
+   * RLS is the filter — an issuer sees orders through its own offerings, the
+   * platform sees everything (dual-axis policy, migration 050).
+   */
+  listRecent(tenant: TenantContext, limit: number): Promise<Subscription[]> {
+    return this.db.scoped(tenant, (tx) =>
+      tx.select().from(subscriptions).orderBy(desc(subscriptions.createdAt)).limit(limit),
+    );
+  }
+
   listForWallet(tenant: TenantContext, wallet: string): Promise<Subscription[]> {
     return this.db.scoped(tenant, (tx) =>
       tx

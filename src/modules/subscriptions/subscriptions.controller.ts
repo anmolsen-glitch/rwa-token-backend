@@ -3,12 +3,14 @@
  *   GET  /api/investor/orders            your orders
  *   POST /api/investor/orders/:ref/pay   capture, then settle (mint)
  *
+ *   GET  /api/admin/subscriptions        back-office order reconciliation
+ *
  * Investor session. The wallet comes from the verified token, never the body —
  * otherwise anyone could place an order against someone else's wallet.
  */
-import { Body, Controller, Get, HttpCode, Param, Post } from '@nestjs/common';
-import { ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
-import { CurrentUser, Session, Tenant } from '@shared/auth/decorators';
+import { Body, Controller, Get, HttpCode, Param, Post, Query } from '@nestjs/common';
+import { ApiOperation, ApiParam, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { CurrentUser, Roles, Session, Tenant } from '@shared/auth/decorators';
 import type { Principal, TenantContext } from '@shared/auth/tenant-context';
 import { AppError } from '@shared/errors/app-error';
 import {
@@ -112,5 +114,26 @@ export class SubscriptionsController {
       reference,
       dto.txHash,
     );
+  }
+}
+
+@ApiTags('Cap Table')
+@ApiAuthErrors()
+@Controller('admin/subscriptions')
+export class AdminSubscriptionsController {
+  constructor(private readonly subs: SubscriptionsService) {}
+
+  @ApiOperation({
+    summary: 'Order reconciliation list',
+    description:
+      'Every order your tenancy can see, newest first — fiat ↔ tokens ↔ tx. An issuer ' +
+      'sees orders on its own offerings (RLS, not a WHERE clause); the platform operator ' +
+      'sees all of them.',
+  })
+  @ApiQuery({ name: 'limit', required: false, description: 'Max rows (default 200, cap 500)' })
+  @Roles('issuer_admin', 'compliance', 'agent')
+  @Get()
+  list(@Tenant() t: TenantContext, @Query('limit') limit?: string) {
+    return this.subs.listAll(t, Number(limit) || 200);
   }
 }

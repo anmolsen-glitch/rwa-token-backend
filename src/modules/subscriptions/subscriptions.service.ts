@@ -382,6 +382,11 @@ export class SubscriptionsService {
     return this.repo.listForWallet(tenant, wallet).then((items) => ({ items }));
   }
 
+  /** Back-office reconciliation list. Tenant-scoped by RLS, newest first. */
+  listAll(tenant: TenantContext, limit = 200) {
+    return this.repo.listRecent(tenant, Math.min(limit, 500)).then((items) => ({ items }));
+  }
+
   /**
    * Where an order's crypto payment must be sent, and how much.
    *
