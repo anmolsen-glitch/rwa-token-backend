@@ -1,0 +1,202 @@
+/**
+ * Offering reads, tenant-scoped.
+ *
+ * Isolation is enforced TWICE, on purpose (TENANCY_MODEL.md §1 D3):
+ *   1. the issuer predicates below, and
+ *   2. Postgres RLS policies (migration 042) on the app_tenant_login connection.
+ *
+ * The predicates are not redundant. They keep the intent readable at the call
+ * site and make the scoping unit-testable; RLS is the backstop that holds when
+ * someone forgets one.
+ */
+import { Injectable } from '@nestjs/common';
+import { and, asc, desc, eq, or, sql, type SQL } from 'drizzle-orm';
+import { DbService } from '@shared/db/db.service';
+import { offerings, tokens, type Offering } from '@shared/db/schema';
+import type { TenantContext } from '@shared/auth/tenant-context';
+
+/** The columns a caller may set. `issuerId` and `status` are NOT among them. */
+export interface NewOfferingInput {
+  id: string;
+  name: string;
+  location?: string | null;
+  assetType?: string | null;
+  image?: string | null;
+  description?: string | null;
+  currency: string;
+  pricePerToken: string;
+  minInvestment: string;
+  targetRaise: string;
+  yieldPct?: string | null;
+  country: number;
+  maxInvestment?: string | null;
+  accreditedMaxInvestment?: string | null;
+  minimumRaise?: string | null;
+  requiresAccreditation?: boolean;
+}
+
+@Injectable()
+export class OfferingsRepository {
+  constructor(private readonly db: DbService) {}
+
+  /**
+   * The issuer predicate for a caller.
+   *
+   * `undefined` means "no restriction" (platform admin). Investors see every
+   * issuer's offerings — this is a marketplace, and browsing is cross-issuer by
+   * design (TENANCY_MODEL.md §2.4).
+   *
+   * Since migration 043 offerings.issuer_id is NOT NULL, so every offering has
+   * exactly one owner — there is no longer an unassigned bucket to reason about.
+   */
+  private scopeFilter(tenant: TenantContext): SQL | undefined {
+    if (tenant.kind === 'issuer') return eq(offerings.issuerId, tenant.issuerId);
+    return undefined;
+  }
+
+  async list(tenant: TenantContext): Promise<Offering[]> {
+    const where = this.scopeFilter(tenant);
+    return this.db.scoped(tenant, (tx) => {
+      const q = tx.select().from(offerings);
+      return (where ? q.where(where) : q).orderBy(asc(offerings.sortOrder), desc(offerings.createdAt));
+    });
+  }
+
+  async findById(tenant: TenantContext, id: string): Promise<Offering | undefined> {
+    const scope = this.scopeFilter(tenant);
+    const where = scope ? and(eq(offerings.id, id), scope) : eq(offerings.id, id);
+    const [row] = await this.db.scoped(tenant, (tx) =>
+      tx.select().from(offerings).where(where).limit(1),
+    );
+    return row;
+  }
+
+  /** Resolve an offering by its deployed token symbol. */
+  async findByTokenSymbol(tenant: TenantContext, symbol: string): Promise<Offering | undefined> {
+    const scope = this.scopeFilter(tenant);
+    const bySymbol = sql`upper(${offerings.tokenSymbol}) = upper(${symbol})`;
+    const where = scope ? and(bySymbol, scope) : bySymbol;
+    const [row] = await this.db.scoped(tenant, (tx) =>
+      tx.select().from(offerings).where(where).limit(1),
+    );
+    return row;
+  }
+
+  /**
+   * What a signed-in investor may see: every public offering, plus private
+   * placements when they are accredited.
+   *
+   * Private placements are restricted to accredited investors, so `accredited`
+   * comes from the person's own record — never from the request.
+   */
+  async listVisibleToInvestor(accredited: boolean): Promise<Offering[]> {
+    const visible = accredited
+      ? or(eq(offerings.visibility, 'public'), eq(offerings.visibility, 'private'))
+      : eq(offerings.visibility, 'public');
+    return this.db.scoped({ kind: 'platform' }, (tx) =>
+      tx
+        .select()
+        .from(offerings)
+        .where(
+          and(
+            visible,
+            or(eq(offerings.status, 'open'), eq(offerings.status, 'coming_soon')),
+          ),
+        )
+        .orderBy(asc(offerings.sortOrder), desc(offerings.createdAt)),
+    );
+  }
+
+  /** Public marketplace listing — no session, so no tenant. Platform scope. */
+  async listPublic(): Promise<Offering[]> {
+    return this.db.scoped({ kind: 'platform' }, (tx) =>
+      tx
+        .select()
+        .from(offerings)
+        .where(
+          and(
+            eq(offerings.visibility, 'public'),
+            or(eq(offerings.status, 'open'), eq(offerings.status, 'coming_soon')),
+          ),
+        )
+        .orderBy(asc(offerings.sortOrder), desc(offerings.createdAt)),
+    );
+  }
+
+  /**
+   * Create an offering for an issuer.
+   *
+   * `issuerId` comes from the caller's TENANT, never the body — the RLS WITH
+   * CHECK on offerings enforces the same thing, so a bug here still cannot
+   * create an asset under someone else's issuer.
+   */
+  async create(
+    tenant: TenantContext,
+    issuerId: string,
+    input: NewOfferingInput,
+  ): Promise<Offering> {
+    const [row] = await this.db.scoped(tenant, (tx) =>
+      tx
+        .insert(offerings)
+        .values({ ...input, issuerId, status: 'coming_soon' })
+        .returning(),
+    );
+    return row;
+  }
+
+  async update(
+    tenant: TenantContext,
+    id: string,
+    patch: Partial<NewOfferingInput> & { status?: string },
+  ): Promise<Offering | undefined> {
+    const [row] = await this.db.scoped(tenant, (tx) =>
+      tx
+        .update(offerings)
+        .set({ ...patch, updatedAt: new Date() })
+        .where(eq(offerings.id, id))
+        .returning(),
+    );
+    return row;
+  }
+
+  /**
+   * Delete an offering.
+   *
+   * Refuses once a token exists: the asset is on-chain and holders may exist, so
+   * removing the row would orphan real holdings. Callers close instead.
+   */
+  async remove(tenant: TenantContext, id: string): Promise<boolean> {
+    const rows = await this.db.scoped(tenant, (tx) =>
+      tx
+        .delete(offerings)
+        .where(and(eq(offerings.id, id), sql`${offerings.tokenSymbol} IS NULL`))
+        .returning({ id: offerings.id }),
+    );
+    return rows.length > 0;
+  }
+
+  /** Record the deployed token on the offering. */
+  async setTokenSymbol(tenant: TenantContext, id: string, symbol: string): Promise<void> {
+    await this.db.scoped(tenant, (tx) =>
+      tx
+        .update(offerings)
+        .set({ tokenSymbol: symbol, updatedAt: new Date() })
+        .where(eq(offerings.id, id)),
+    );
+  }
+
+  /**
+   * Insert the authoritative token row (migration 039).
+   *
+   * Written here rather than by the indexer so that `tokens` exists the moment
+   * a suite is deployed — every tenant scope for that asset depends on it.
+   */
+  async recordToken(
+    tenant: TenantContext,
+    t: { network: string; symbol: string; issuerId: string; address: string },
+  ): Promise<void> {
+    await this.db.scoped(tenant, (tx) =>
+      tx.insert(tokens).values(t).onConflictDoNothing(),
+    );
+  }
+}
