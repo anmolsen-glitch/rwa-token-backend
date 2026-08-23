@@ -15,6 +15,7 @@ import { Body, Controller, Get, HttpCode, Post, Res } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { FastifyReply } from 'fastify';
 import { CurrentUser, Public, Session } from '@shared/auth/decorators';
+import { JwtService } from '@shared/auth/jwt.service';
 import { SessionService } from '@shared/auth/session.service';
 import type { Principal } from '@shared/auth/tenant-context';
 import { ApiAuthErrors, ApiConflict, ApiValidationError } from '@shared/openapi/api-error.decorator';
@@ -40,6 +41,7 @@ export class AccountController {
     private readonly accounts: AccountService,
     private readonly session: SessionService,
     private readonly siwe: SiweService,
+    private readonly jwt: JwtService,
   ) {}
 
   @Public()
@@ -212,8 +214,18 @@ export class AccountController {
   @ApiConflict('That wallet is already linked to a different account.', 'WALLET_ALREADY_LINKED')
   @HttpCode(200)
   @Post('wallet/connect')
-  async connect(@CurrentUser() principal: Principal, @Body() dto: SiweVerifyDto) {
+  async connect(
+    @CurrentUser() principal: Principal,
+    @Body() dto: SiweVerifyDto,
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ) {
     const address = await this.siwe.consumeAndRecover(dto.address, dto.signature);
-    return this.accounts.connectWallet(principal.id, address);
+    const view = await this.accounts.connectWallet(principal.id, address);
+    /* The same signature also establishes the WALLET (investor) session — the
+       portal's orders/portfolio/claims routes need it, and asking for a second
+       prompt for a control the user just proved would be pure friction. Same
+       behaviour as the Express attachWallet. */
+    this.session.issueInvestor(reply, this.jwt.signInvestor(address));
+    return view;
   }
 }
