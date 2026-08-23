@@ -247,7 +247,7 @@ export class SubscriptionsService {
 
   /** Investor-initiated capture (the synchronous "pull" path). */
   async pay(principal: Principal, tenant: TenantContext, wallet: string, reference: string) {
-    const sub = await this.repo.byReference(tenant, reference);
+    const sub = await this.repo.byIdOrReference(tenant, reference);
     if (!sub) throw AppError.notFound('Order', reference);
     if (sub.wallet.toLowerCase() !== wallet.toLowerCase()) {
       throw AppError.forbidden('Not your order.');
@@ -421,7 +421,7 @@ export class SubscriptionsService {
     reference: string,
     txHash: string,
   ) {
-    const sub = await this.repo.byReference(tenant, reference);
+    const sub = await this.repo.byIdOrReference(tenant, reference);
     if (!sub) throw AppError.notFound('Order', reference);
     if (sub.wallet.toLowerCase() !== wallet.toLowerCase()) {
       throw AppError.forbidden('Not your order.');

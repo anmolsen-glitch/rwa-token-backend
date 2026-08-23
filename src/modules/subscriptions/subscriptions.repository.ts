@@ -157,6 +157,20 @@ export class SubscriptionsRepository {
     return row;
   }
 
+  /**
+   * The pay routes accept the row ID or the `ord_…` reference. The invest
+   * panel has always passed the id while the API documented the reference;
+   * the two vocabularies are unambiguous (ids are numeric), so accept both
+   * rather than strand a paid order behind a 404.
+   */
+  async byIdOrReference(tenant: TenantContext, key: string): Promise<Subscription | undefined> {
+    if (!/^\d+$/.test(key)) return this.byReference(tenant, key);
+    const [row] = await this.db.scoped(tenant, (tx) =>
+      tx.select().from(subscriptions).where(eq(subscriptions.id, key)).limit(1),
+    );
+    return row;
+  }
+
   /** Webhook path: no tenant, matched by the provider's own reference. */
   async byPaymentRef(paymentRef: string): Promise<Subscription | undefined> {
     const [row] = await this.db.worker('subscriptions: lookup by payment ref', (tx) =>
