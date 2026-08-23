@@ -1,6 +1,6 @@
 # Handoff — RWA tokenization platform (NestJS migration)
 
-**Last updated:** 2026-08-22. Written for a fresh session picking this up cold.
+**Last updated:** 2026-08-23. Written for a fresh session picking this up cold.
 
 Read this, then read `CLAUDE.md` in this repo. `CLAUDE.md` is the *contract* —
 how every module must be shaped. This file is the *situation* — where things
@@ -18,45 +18,66 @@ Four apps in `~/trex_rwa/`:
 
 | Path | What | State |
 |---|---|---|
-| `rwa-token-backend-nest` | **NestJS backend — the live one** | 127 routes, the front door |
-| `rwa-token-backend` | Express backend — the original | Kept as proxy fallback, **do not delete** |
+| `rwa-token-backend-nest` | **NestJS backend — the live one** | 132 routes, serves the ENTIRE API |
+| `rwa-token-backend` | Express backend — the original | Idle fallback, **do not delete** |
 | `rwa-token-frontend` | Admin portal (Vite + React) | Points at Nest |
 | `rwa-investor-next` | Investor portal (Next 16) | Points at Nest |
 
-> **Only `rwa-investor-next` is under git.** The other three have **no version
-> control**. Any destructive edit is unrecoverable — back up first. There is a
+> **All four repos are under git as of 2026-08-23** (the three unversioned ones
+> got an initial commit before route retirement started). There is also a
 > cutover backup at `~/trex_rwa/.cutover-backup-2026-08-22/`.
 
 ---
 
-## 2. Current state — the cutover happened
+## 2. Current state — Nest serves everything
 
-Nest is the front door. It proxies anything it does not serve back to Express.
+The last four proxied routes were ported on 2026-08-23 and their Express
+handlers deleted. Nothing reaches Express anymore; the catch-all proxy remains
+wired but has no routes left to forward.
 
 ```
-frontends ──▶ Nest :4100 ──(unported routes)──▶ Express :4000
+frontends ──▶ Nest :4100 ── serves the ENTIRE API
                   │
-                  ├── owns the INDEXER      (INDEXER_ENABLED=true)
+                  ├── owns the INDEXER       (INDEXER_ENABLED=true)
                   └── owns the ORDER SWEEPER (SWEEPER_ENABLED=true)
 
-Express :4000 ── owns DEPLOY RECOVERY only (Nest has no equivalent)
-                 its indexer + sweeper are gated off in its .env
+Express :4000 ── idle fallback. Indexer + sweeper gated off in its .env;
+                 deploy recovery RETIRED (see below). Safe to stop, kept
+                 runnable per the do-not-delete rule.
 ```
 
-**Still served by Express through the proxy** (not yet ported):
-`/api/uploads` · `/api/subscriptions` (admin order list) ·
-`/api/issuers/:id/assets` · `/api/investor/transfer/preview`
+The 2026-08-23 ports, and where they landed:
 
-Express cannot be retired until those four plus a deploy-recovery loop exist in
-Nest.
+| Was (Express) | Now (Nest) |
+|---|---|
+| `POST/GET /api/uploads` | same paths, `modules/uploads` (public, per-route body/rate limits via an onRoute hook in `main.ts`) |
+| `GET /api/subscriptions` | `GET /api/admin/subscriptions` — now tenant-scoped by RLS, camelCase, `{ items }` |
+| `POST /api/issuers/:id/assets` | `POST /api/admin/issuers/:issuerId/assets` — create-listing only; `deployNow` is refused |
+| `POST /api/investor/transfer/preview` | same path, `modules/portfolio` |
+
+**Deploy recovery was retired, not ported.** It rescued exactly one state — an
+interrupted `createAsset deployNow` one-shot, tracked in `pending_deploys`.
+That state can no longer arise: Nest writes the offering row FIRST and the
+deploy is a separate retryable step whose adoption path (salt lookup + owner
+check + conditional unpause) finishes any interrupted attempt on the next
+retry. `pending_deploys` was verified empty before the loop was switched off.
+
+Two port gaps found and fixed along the way, both live-verified:
+- Nest's `DeployService` never **unpaused** after deploy (the factory deploys
+  tokens PAUSED; Express did this in `finishSuite`). All 8 existing Sepolia
+  tokens were checked unpaused — the gap had not bitten yet.
+- `deploy-token` now honors the wizard's recorded **token plan** (tokenName,
+  maxHolders/lockupDays fallback, `intendedStatus` applied once a token
+  exists), and the admin health tile now calls `/api/health` (`/health` had
+  404'd since cutover).
 
 ### Running it
 
 ```bash
 cd rwa-token-backend-nest && npm run build && node dist/main.js   # :4100
-cd rwa-token-backend      && npm run dev                          # :4000 (tsx watch)
+cd rwa-token-backend      && npm run dev                          # :4000 (optional fallback)
 npm run db:migrate     # applies migrations/*.sql in order
-npx vitest run         # 314 passing, 2 skipped
+npx vitest run         # 335 passing, 2 skipped
 ```
 
 ---
@@ -218,12 +239,16 @@ Read it before simplifying.
 
 ## 9. Suggested next steps
 
-1. **Retire Express**: port the four proxied routes plus a deploy-recovery loop.
-   Then delete Express routes — but put that repo under git first.
-2. **Confirm the indexer handover.** Express should log
-   `indexer disabled (INDEXER_ENABLED=false)`. If it does not, both apps are
-   indexing.
-3. **New features** (§6) — per-issuer policy is the one the tenancy design is
+1. ~~Retire Express~~ — DONE 2026-08-23. All routes ported, deploy recovery
+   retired, indexer handover confirmed in the Express log
+   (`indexer disabled (INDEXER_ENABLED=false)`). Express is an idle fallback;
+   stopping its process is now a choice, not a migration step. `LEGACY_API_URL`
+   can be unset once you are comfortable dropping the proxy.
+2. **New features** (§6) — per-issuer policy is the one the tenancy design is
    already waiting for.
-4. **`managers` and `spv_managers` have no scoped login** — the roles exist, the
+3. **`managers` and `spv_managers` have no scoped login** — the roles exist, the
    sessions do not.
+4. Consider an `issuer_admin` account for issuer 2 in dev seeds — several
+   issuer-scoped routes (offering delete, asset create as non-platform) cannot
+   be exercised with the current seed roster (platform_admin / agent /
+   compliance only).
