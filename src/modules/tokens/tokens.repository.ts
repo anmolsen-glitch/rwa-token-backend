@@ -51,6 +51,25 @@ export class TokensRepository {
    * the order itself already names the token, and the signature is the
    * authorization. Never call this from a request handler.
    */
+  /** The indexer's cursor row — decimals + how far it has read. */
+  async indexerStateFor(
+    tokenAddress: string,
+  ): Promise<{ decimals: number; lastIndexedBlock: number } | undefined> {
+    const res = await this.db.worker('tokens: indexer state', (tx) =>
+      tx.execute(sql`
+        SELECT decimals, last_indexed_block FROM indexer_state
+         WHERE token = ${tokenAddress.toLowerCase()}
+      `),
+    );
+    const [row] = (Array.isArray(res) ? res : ((res as { rows?: unknown[] }).rows ?? [])) as {
+      decimals: number;
+      last_indexed_block: number;
+    }[];
+    return row
+      ? { decimals: Number(row.decimals ?? 0), lastIndexedBlock: Number(row.last_indexed_block ?? 0) }
+      : undefined;
+  }
+
   /** Non-throwing variant of requireAnyTenant — for views where a missing
       token just means "not deployed yet", not an error. */
   async findAnyTenant(symbol: string): Promise<Token | undefined> {

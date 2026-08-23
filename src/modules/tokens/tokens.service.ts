@@ -92,7 +92,10 @@ export class TokensService {
    */
   async capTable(tenant: TenantContext, symbol: string) {
     const r = await this.repo.require(tenant, symbol);
-    const decimals = Number(await this.chain.token(r.address).decimals());
+    /* Decimals from the indexer cursor, not a chain call — the cap table is
+       served from the indexer DB so it is instant and free of RPC load. */
+    const state = await this.repo.indexerStateFor(r.address);
+    const decimals = state?.decimals ?? 0;
 
     const rows = await this.db.scoped(tenant, async (tx) => {
       const res = await tx.execute(sql`
@@ -106,12 +109,24 @@ export class TokensService {
       }>;
     });
 
-    const holders = rows.map((h) => ({
-      address: h.address,
-      balance: ethers.formatUnits(BigInt(h.balance), decimals),
-      raw: h.balance,
-    }));
-    return { symbol: r.symbol, decimals, holders, holderCount: holders.length };
+    const raw = rows.map((h) => ({ address: h.address, balance: BigInt(h.balance) }));
+    const totalSupply = raw.reduce((sum, h) => sum + h.balance, 0n);
+    const fmt = (v: bigint) => ethers.formatUnits(v, decimals);
+
+    return {
+      token: r.address,
+      symbol: r.symbol,
+      decimals,
+      totalSupply: fmt(totalSupply),
+      holderCount: raw.length,
+      lastIndexedBlock: state?.lastIndexedBlock ?? 0,
+      holders: raw.map((h) => ({
+        address: h.address,
+        balance: fmt(h.balance),
+        percent:
+          totalSupply > 0n ? Math.round(Number((h.balance * 1000000n) / totalSupply)) / 10000 : 0,
+      })),
+    };
   }
 
   async holder(tenant: TenantContext, symbol: string, address: string) {
@@ -135,16 +150,33 @@ export class TokensService {
   /** Recent transfers from the index. */
   async transfers(tenant: TenantContext, symbol: string, limit: number) {
     const r = await this.repo.require(tenant, symbol);
+    const state = await this.repo.indexerStateFor(r.address);
+    const decimals = state?.decimals ?? 0;
     const rows = await this.db.scoped(tenant, async (tx) => {
       const res = await tx.execute(sql`
         SELECT tx_hash, log_index, block_number, from_addr, to_addr, value, kind
           FROM transfers WHERE lower(token) = lower(${r.address})
          ORDER BY block_number DESC, log_index DESC LIMIT ${limit}
       `);
-      return (Array.isArray(res) ? res : ((res as { rows?: unknown[] }).rows ?? [])) as Array<
-        Record<string, unknown>
-      >;
+      return (Array.isArray(res) ? res : ((res as { rows?: unknown[] }).rows ?? [])) as Array<{
+        tx_hash: string;
+        block_number: string;
+        from_addr: string;
+        to_addr: string;
+        value: string;
+        kind: string;
+      }>;
     });
-    return { symbol: r.symbol, items: rows };
+    return {
+      symbol: r.symbol,
+      items: rows.map((t) => ({
+        block: Number(t.block_number),
+        txHash: t.tx_hash,
+        kind: t.kind,
+        from: t.from_addr,
+        to: t.to_addr,
+        value: ethers.formatUnits(BigInt(t.value), decimals),
+      })),
+    };
   }
 }

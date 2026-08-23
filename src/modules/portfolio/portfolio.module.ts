@@ -11,5 +11,6 @@ import { PortfolioService } from './portfolio.service';
   imports: [TokensModule, OfferingsModule, OnboardingModule, ComplianceModule, WalletModule],
   controllers: [PortfolioController],
   providers: [PortfolioService],
+  exports: [PortfolioService],
 })
 export class PortfolioModule {}

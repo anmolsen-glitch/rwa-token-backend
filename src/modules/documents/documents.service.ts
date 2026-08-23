@@ -19,6 +19,7 @@ import { AppConfig } from '@shared/config/app-config.service';
 import { DOCUMENT_STORAGE, type DocumentStorage } from '@shared/storage/document-storage';
 import type { Principal, TenantContext } from '@shared/auth/tenant-context';
 import type { KycDocument } from '@shared/db/schema';
+import { KycRepository } from '@modules/kyc/kyc.repository';
 import { DocumentsRepository } from './documents.repository';
 
 /** What a document may be. Free-form types would make review unauditable. */
@@ -55,6 +56,7 @@ export class DocumentsService {
     private readonly repo: DocumentsRepository,
     private readonly audit: AuditService,
     private readonly config: AppConfig,
+    private readonly kyc: KycRepository,
     @Inject(DOCUMENT_STORAGE) private readonly storage: DocumentStorage,
   ) {}
 
@@ -134,8 +136,12 @@ export class DocumentsService {
   }
 
   /** A reviewer listing someone's documents. Metadata only — no bytes, no audit. */
-  async listFor(accountId: string): Promise<{ items: DocumentMeta[] }> {
-    const rows = await this.repo.listForAccount(accountId);
+  async listFor(subject: string): Promise<{ items: DocumentMeta[] }> {
+    /* The reviewer UI addresses people by WALLET; accept either, same as the
+       KYC decision routes' :subject. */
+    const account = await this.kyc.resolveSubject(subject);
+    if (!account) return { items: [] };
+    const rows = await this.repo.listForAccount(account.id);
     return { items: rows.map(DocumentsService.meta) };
   }
 

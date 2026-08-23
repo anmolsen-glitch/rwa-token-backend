@@ -35,6 +35,7 @@ import { SignerService } from '@shared/chain/signer.service';
 import { TxService } from '@shared/chain/tx.service';
 import type { Principal, TenantContext } from '@shared/auth/tenant-context';
 import type { Account } from '@shared/db/schema';
+import { KycRepository } from '@modules/kyc/kyc.repository';
 import { ComplianceRepository } from './compliance.repository';
 
 export interface AccreditationCandidate {
@@ -65,6 +66,7 @@ export class AccreditationService {
     private readonly identities: IdentityService,
     private readonly signers: SignerService,
     private readonly tx: TxService,
+    private readonly kyc: KycRepository,
   ) {}
 
   private static candidate(a: Account): AccreditationCandidate {
@@ -100,6 +102,11 @@ export class AccreditationService {
     approve: boolean,
     note?: string,
   ): Promise<AccreditationResult> {
+    /* The admin console addresses people by WALLET; accept either, same as
+       the KYC decision routes' :subject. */
+    const resolved = await this.kyc.resolveSubject(accountId);
+    if (!resolved) throw AppError.notFound('Account', accountId);
+    accountId = resolved.id;
     const account = await this.repo.accountById(accountId);
     if (!account) throw AppError.notFound('Account', accountId);
 

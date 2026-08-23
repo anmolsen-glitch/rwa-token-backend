@@ -1,8 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { AppError } from '@shared/errors/app-error';
 import { AuditService } from '@shared/audit/audit.service';
+import { ChainService } from '@shared/chain/chain.service';
 import type { Principal, TenantContext } from '@shared/auth/tenant-context';
 import type { Acceptance, Investor, Subscription } from '@shared/db/schema';
+import { DistributionsRepository } from '@modules/distributions/distributions.repository';
+import { OfferingsService } from '@modules/offerings/offerings.service';
+import { OnboardingService } from '@modules/onboarding/onboarding.service';
+import { PortfolioService } from '@modules/portfolio/portfolio.service';
+import { TokensRepository } from '@modules/tokens/tokens.repository';
 import { InvestorsRepository } from './investors.repository';
 
 /**
@@ -16,6 +22,10 @@ export interface InvestorSummary {
   onchainid: string | null;
   country: number | null;
   kycStatus: string;
+  /* Compliance STATUSES, not PII — the register's columns must be truthful
+     without forcing an audited detail read per row. */
+  amlStatus: string | null;
+  accreditationStatus: string | null;
   verified: boolean;
   createdAt: string;
 }
@@ -56,6 +66,12 @@ export class InvestorsService {
   constructor(
     private readonly repo: InvestorsRepository,
     private readonly audit: AuditService,
+    private readonly onboarding: OnboardingService,
+    private readonly portfolio: PortfolioService,
+    private readonly offerings: OfferingsService,
+    private readonly claims: DistributionsRepository,
+    private readonly tokens: TokensRepository,
+    private readonly chain: ChainService,
   ) {}
 
   private static summary(i: Investor): InvestorSummary {
@@ -64,6 +80,8 @@ export class InvestorsService {
       onchainid: i.onchainid,
       country: i.country,
       kycStatus: i.kycStatus,
+      amlStatus: i.amlStatus,
+      accreditationStatus: i.accreditationStatus,
       verified: i.verified,
       createdAt: i.createdAt.toISOString(),
     };
@@ -99,6 +117,136 @@ export class InvestorsService {
    * it is not audited as one — auditing self-reads would bury the entries that
    * matter in noise.
    */
+  /**
+   * The admin console's investor drawer — ported from Express
+   * `adminInvestorDetail` (onboarding.service.ts): person + KYC + identity
+   * (all linked wallets, screening), holdings valued at current NAV, earnings
+   * grouped BY CURRENCY (₹ + AED is a meaningless total), and the audit
+   * timeline. PII: audited exactly like detail().
+   */
+  async adminPanel(principal: Principal, tenant: TenantContext, wallet: string) {
+    const record = await this.repo.findByWallet(tenant, wallet);
+    if (!record) throw AppError.notFound('Investor', wallet);
+    await this.audit.recordPiiAccess(principal, tenant, record.wallet, PII_FIELDS);
+
+    const primary = await this.onboarding.resolvePrimaryWallet(record.wallet);
+    const walletsOfPerson = await this.onboarding.walletsForPerson(primary);
+    const PLATFORM = { kind: 'platform' } as const;
+
+    const [links, holdingsRaw, offeringRows, timelineRows, claims, tokenRows] = await Promise.all([
+      this.repo.linkedWallets(primary),
+      this.portfolio.portfolio(primary).then((r) => r.items),
+      this.offerings.list(PLATFORM).then((r) => r.items),
+      this.repo.timelineFor(walletsOfPerson, 100),
+      this.claims.claimsForWallets(PLATFORM, walletsOfPerson),
+      this.tokens.list(PLATFORM),
+    ]);
+
+    const linkByAddr = new Map(links.map((l) => [l.address.toLowerCase(), l]));
+    const identityWallets = walletsOfPerson.map((w) => ({
+      address: w,
+      primary: w.toLowerCase() === primary.toLowerCase(),
+      linkedAt: linkByAddr.get(w.toLowerCase())?.createdAt?.toISOString() ?? null,
+      amlScreening: linkByAddr.get(w.toLowerCase())?.screening ?? null,
+    }));
+
+    /* Per-token verification, live from the chain — the honest version of the
+       list's single `verified` flag. */
+    const verifiedFor: Record<string, boolean> = {};
+    for (const t of tokenRows) {
+      try {
+        const registryAddr = (await this.chain.token(t.address).identityRegistry()) as string;
+        verifiedFor[t.symbol] = (await this.chain
+          .identityRegistry(registryAddr)
+          .isVerified(primary)) as boolean;
+      } catch {
+        /* skip on RPC failure */
+      }
+    }
+
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const earningsByCcy = new Map<string, { claimed: number; claimable: number; projectedAnnual: number }>();
+    const bucket = (ccy: string) => {
+      const k = ccy || '—';
+      if (!earningsByCcy.has(k)) earningsByCcy.set(k, { claimed: 0, claimable: 0, projectedAnnual: 0 });
+      return earningsByCcy.get(k)!;
+    };
+    for (const c of claims) {
+      const b = bucket(c.currency ?? '—');
+      if (c.status === 'claimed') b.claimed += Number(c.amount);
+      else b.claimable += Number(c.amount);
+    }
+
+    const bySymbol = new Map(
+      offeringRows.filter((o) => o.tokenSymbol).map((o) => [o.tokenSymbol as string, o]),
+    );
+    const holdings = holdingsRaw.map((h) => {
+      const o = bySymbol.get(h.symbol);
+      const bal = Number(h.balance);
+      const nav = o ? o.navPerToken : 0;
+      const value = bal * nav;
+      const yieldPct = o?.yieldPct != null ? Number(o.yieldPct) : 0;
+      const annual = value * (yieldPct / 100);
+      if (o?.currency && bal > 0) bucket(o.currency).projectedAnnual += annual;
+      return {
+        symbol: h.symbol,
+        balance: bal,
+        frozen: h.frozen,
+        frozenTokens: h.frozenTokens,
+        stale: h.unavailable ?? false,
+        currency: o?.currency ?? null,
+        navPerToken: round2(nav),
+        value: round2(value),
+        yieldPct,
+        projectedAnnual: round2(annual),
+      };
+    });
+
+    const d = (record.kycDetails ?? {}) as Record<string, unknown>;
+    return {
+      person: {
+        name: record.name,
+        email: record.email,
+        country: record.country,
+        createdAt: record.createdAt.toISOString(),
+        hasAccount: record.accountId != null,
+      },
+      kyc: {
+        status: record.kycStatus,
+        onchainVerified: record.verified,
+        complianceApproved: record.kycStatus === 'completed',
+        note: record.kycNote,
+        submittedAt: record.kycSubmittedAt?.toISOString() ?? null,
+        rejectedAt: record.kycRejectedAt?.toISOString() ?? null,
+        provider: record.kycProvider,
+        docType: (d.docType as string) ?? null,
+        addressDocType: (d.addressDocType as string) ?? null,
+        amlStatus: record.amlStatus,
+        accreditationStatus: record.accreditationStatus,
+        accreditationNote: record.accreditationNote,
+        verifiedFor,
+      },
+      identity: { onchainid: record.onchainid, primaryWallet: primary, wallets: identityWallets },
+      holdings,
+      earnings: [...earningsByCcy.entries()]
+        .filter(([ccy]) => ccy !== '—')
+        .map(([currency, v]) => ({
+          currency,
+          claimed: round2(v.claimed),
+          claimable: round2(v.claimable),
+          projectedAnnual: round2(v.projectedAnnual),
+        })),
+      timeline: timelineRows.map((a) => ({
+        when: a.createdAt.toISOString(),
+        action: a.action,
+        status: a.status,
+        actor: a.actorEmail,
+        detail: a.params ?? null,
+        txHash: a.txHash,
+      })),
+    };
+  }
+
   async detail(
     principal: Principal,
     tenant: TenantContext,

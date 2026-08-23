@@ -11,6 +11,6 @@ import { DistributionsService } from './distributions.service';
   imports: [TokensModule, OfferingsModule, ManagersModule, OnboardingModule],
   controllers: [DistributionsController, InvestorClaimsController],
   providers: [DistributionsService, DistributionsRepository],
-  exports: [DistributionsService],
+  exports: [DistributionsService, DistributionsRepository],
 })
 export class DistributionsModule {}

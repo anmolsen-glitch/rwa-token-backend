@@ -8,16 +8,19 @@
  * the read (§5.2).
  */
 import { Injectable } from '@nestjs/common';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { DbService } from '@shared/db/db.service';
 import {
   accounts,
+  auditLog,
   investors,
   issuerInvestorAcceptance,
   subscriptions,
+  wallets,
   type Acceptance,
   type Investor,
   type Subscription,
+  type Wallet,
 } from '@shared/db/schema';
 import type { TenantContext } from '@shared/auth/tenant-context';
 
@@ -115,5 +118,34 @@ export class InvestorsRepository {
         .returning(),
     );
     return saved;
+  }
+
+  /** Link rows (screening outcome, linked-at) for a person's wallets. */
+  linkedWallets(primaryWallet: string): Promise<Wallet[]> {
+    return this.db.worker('investors: linked wallets for admin panel', (tx) =>
+      tx
+        .select()
+        .from(wallets)
+        .where(eq(wallets.primaryWallet, primaryWallet.toLowerCase()))
+        .orderBy(asc(wallets.createdAt)),
+    );
+  }
+
+  /**
+   * The audit rows targeting any of a person's wallets — the admin panel's
+   * activity timeline. Worker read: the panel is platform-side and the rows
+   * may span issuers (the person can hold assets from several).
+   */
+  timelineFor(targets: string[], limit: number) {
+    if (targets.length === 0) return Promise.resolve([]);
+    const lowered = targets.map((t) => t.toLowerCase());
+    return this.db.worker('investors: person timeline', (tx) =>
+      tx
+        .select()
+        .from(auditLog)
+        .where(inArray(sql`lower(${auditLog.target})`, lowered))
+        .orderBy(desc(auditLog.createdAt), desc(auditLog.id))
+        .limit(limit),
+    );
   }
 }

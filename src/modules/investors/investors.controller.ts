@@ -53,7 +53,7 @@ export class InvestorsController {
     @Tenant() tenant: TenantContext,
     @Param('wallet') wallet: string,
   ) {
-    return this.investors.detail(principal, tenant, wallet);
+    return this.investors.adminPanel(principal, tenant, wallet);
   }
 
   /* PUT, not POST: the decision is idempotent per (issuer, investor) — the same

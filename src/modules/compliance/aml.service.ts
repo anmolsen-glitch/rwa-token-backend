@@ -26,6 +26,7 @@ import {
 } from '@shared/aml/aml.provider';
 import type { Principal, TenantContext } from '@shared/auth/tenant-context';
 import type { AmlScreening } from '@shared/db/schema';
+import { KycRepository } from '@modules/kyc/kyc.repository';
 import { ComplianceRepository } from './compliance.repository';
 
 export interface ScreeningView {
@@ -47,8 +48,17 @@ export class AmlService {
   constructor(
     private readonly repo: ComplianceRepository,
     private readonly audit: AuditService,
+    private readonly kyc: KycRepository,
     @Inject(AML_PROVIDER) private readonly provider: AmlProvider,
   ) {}
+
+  /* The admin console addresses people by WALLET; the API is account-keyed.
+     Accept either — same contract as the KYC decision routes' :subject. */
+  private async subjectId(subject: string): Promise<string> {
+    const account = await this.kyc.resolveSubject(subject);
+    if (!account) throw AppError.notFound('Account', subject);
+    return account.id;
+  }
 
   private static view(s: AmlScreening): ScreeningView {
     return {
@@ -133,6 +143,7 @@ export class AmlService {
     tenant: TenantContext,
     accountId: string,
   ): Promise<{ accountId: string; amlStatus: AmlStatus; screened: number }> {
+    accountId = await this.subjectId(accountId);
     const account = await this.repo.accountById(accountId);
     if (!account) throw AppError.notFound('Account', accountId);
 
@@ -154,6 +165,7 @@ export class AmlService {
 
   /** The screening history for a person — the compliance case file. */
   async history(accountId: string): Promise<{ amlStatus: string; items: ScreeningView[] }> {
+    accountId = await this.subjectId(accountId);
     const account = await this.repo.accountById(accountId);
     if (!account) throw AppError.notFound('Account', accountId);
 
