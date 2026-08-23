@@ -1,8 +1,9 @@
 /**
- *   GET  /api/investor/portfolio      holdings across every asset and wallet
- *   GET  /api/investor/offerings      assets this investor may see
- *   GET  /api/investor/wallets        their linked wallets
- *   POST /api/investor/wallets/link   link another, proving control
+ *   GET  /api/investor/portfolio         holdings across every asset and wallet
+ *   GET  /api/investor/offerings         assets this investor may see
+ *   GET  /api/investor/wallets           their linked wallets
+ *   POST /api/investor/wallets/link      link another, proving control
+ *   POST /api/investor/transfer/preview  secondary-transfer pre-flight
  *
  * Investor session. Everything is keyed on the PERSON behind the connected
  * wallet, never the wallet alone.
@@ -19,6 +20,7 @@ import {
 } from '@shared/openapi/api-error.decorator';
 import { PortfolioService } from './portfolio.service';
 import { LinkWalletDto } from './dto/link-wallet.dto';
+import { TransferPreviewDto } from './dto/transfer-preview.dto';
 
 @ApiTags('Investor')
 @ApiAuthErrors()
@@ -55,6 +57,26 @@ export class PortfolioController {
   @Get('offerings')
   offerings(@CurrentUser() p: Principal) {
     return this.portfolio.offeringsFor(PortfolioController.walletOf(p));
+  }
+
+  @ApiOperation({
+    summary: 'Preview a secondary transfer',
+    description:
+      'The on-chain transfer is signed in YOUR wallet — this only validates and explains ' +
+      'before you spend gas. Returns every reason the transfer would fail (paused asset, ' +
+      'frozen wallets, unverified recipient, insufficient balance, lock-in), not just the ' +
+      'first.',
+  })
+  @ApiValidationError()
+  @HttpCode(200)
+  @Post('transfer/preview')
+  transferPreview(@CurrentUser() p: Principal, @Body() dto: TransferPreviewDto) {
+    return this.portfolio.previewTransfer(
+      PortfolioController.walletOf(p),
+      dto.tokenSymbol,
+      dto.to,
+      dto.amount,
+    );
   }
 
   @ApiOperation({ summary: 'Your linked wallets' })

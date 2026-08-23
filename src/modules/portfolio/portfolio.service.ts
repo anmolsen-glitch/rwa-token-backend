@@ -13,6 +13,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ethers } from 'ethers';
 import { AppError } from '@shared/errors/app-error';
 import { AuditService } from '@shared/audit/audit.service';
+import { AppConfig } from '@shared/config/app-config.service';
 import { ChainService } from '@shared/chain/chain.service';
 import type { Principal, TenantContext } from '@shared/auth/tenant-context';
 import { TokensRepository } from '@modules/tokens/tokens.repository';
@@ -22,6 +23,13 @@ import { AmlService } from '@modules/compliance/aml.service';
 import { SiweService } from '@modules/wallet/siwe.service';
 
 const PLATFORM: TenantContext = { kind: 'platform' };
+
+/* Reads only — the lockup check mirrors what the compliance module will enforce
+   when the investor actually submits the transfer from their own wallet. */
+const LOCKUP_MODULE_ABI = [
+  'function isLocked(address compliance, address wallet) view returns (bool)',
+  'function getLockupEnd(address compliance, address wallet) view returns (uint256)',
+];
 
 export interface Holding {
   symbol: string;
@@ -46,6 +54,7 @@ export class PortfolioService {
     private readonly siwe: SiweService,
     private readonly chain: ChainService,
     private readonly audit: AuditService,
+    private readonly config: AppConfig,
   ) {}
 
   /**
@@ -137,6 +146,97 @@ export class PortfolioService {
         image: o.image,
         requiresAccreditation: o.requiresAccreditation,
       })),
+    };
+  }
+
+  /**
+   * Secondary-transfer pre-flight.
+   *
+   * The transfer itself is signed in the investor's own wallet (non-custodial);
+   * this only validates and EXPLAINS before they spend gas. Every reason the
+   * chain would revert for — paused asset, frozen wallets, unverified
+   * recipient, insufficient unfrozen balance, lock-in — is collected rather
+   * than failing on the first, so the UI can show all of them at once.
+   *
+   * Reads use the CONNECTED wallet, not the person's aggregate: the transfer
+   * will be signed by exactly this address, so its balance is the one that
+   * matters.
+   */
+  async previewTransfer(connectedWallet: string, symbol: string, toRaw: string, amount: number) {
+    const rec = await this.tokens.require(PLATFORM, symbol);
+    const from = connectedWallet.toLowerCase();
+
+    let to: string;
+    try {
+      to = ethers.getAddress(toRaw).toLowerCase();
+    } catch {
+      throw new AppError('INVALID_RECIPIENT', 400, 'Recipient is not a valid wallet address.');
+    }
+    if (to === from) {
+      throw new AppError('SELF_TRANSFER', 400, "You can't transfer to your own sending wallet.");
+    }
+
+    /* A record can outlive its chain (redeploys in dev). Distinguish "asset
+       not deployed here" from a preview that would misreport every check. */
+    const code = await this.chain.provider.getCode(rec.address);
+    if (!code || code === '0x') {
+      throw new AppError(
+        'TOKEN_NOT_DEPLOYED',
+        503,
+        `Asset "${rec.symbol}" isn't deployed on the current chain.`,
+        { symbol: rec.symbol },
+      );
+    }
+
+    const token = this.chain.token(rec.address);
+    const decimals = Number(await token.decimals());
+    const value = ethers.parseUnits(String(amount), decimals);
+    const reasons: string[] = [];
+
+    if ((await token.paused()) as boolean) reasons.push('Trading is paused for this asset.');
+    if ((await token.isFrozen(from)) as boolean) reasons.push('Your wallet is frozen.');
+
+    const available =
+      ((await token.balanceOf(from)) as bigint) - ((await token.getFrozenTokens(from)) as bigint);
+    if (value > available) {
+      reasons.push(
+        `Amount exceeds your available balance (${ethers.formatUnits(available, decimals)} ${rec.symbol}).`,
+      );
+    }
+
+    const registry = this.chain.identityRegistry((await token.identityRegistry()) as string);
+    if (!((await registry.isVerified(to)) as boolean)) {
+      reasons.push(
+        'Recipient is not a verified investor for this asset — they must complete KYC + onboarding first.',
+      );
+    }
+    if ((await token.isFrozen(to)) as boolean) reasons.push('Recipient wallet is frozen.');
+
+    let lockupEnd = 0;
+    const lockupModule = this.config.get('LOCKUP_MODULE');
+    if (lockupModule) {
+      try {
+        const compliance = (await token.compliance()) as string;
+        const lockup = new ethers.Contract(lockupModule, LOCKUP_MODULE_ABI, this.chain.provider);
+        lockupEnd = Number(await lockup.getLockupEnd(compliance, from));
+        if ((await lockup.isLocked(compliance, from)) as boolean) {
+          reasons.push(
+            `Your tokens are in the lock-in period until ${new Date(lockupEnd * 1000).toISOString().slice(0, 10)}.`,
+          );
+        }
+      } catch {
+        /* module not bound to this token / read failed — skip the lock-in check */
+      }
+    }
+
+    return {
+      ok: reasons.length === 0,
+      reasons,
+      symbol: rec.symbol,
+      to,
+      amount,
+      available: Number(ethers.formatUnits(available, decimals)),
+      lockupEnd,
     };
   }
 
