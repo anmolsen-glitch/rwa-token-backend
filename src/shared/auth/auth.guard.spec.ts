@@ -1,8 +1,10 @@
 /**
  * AuthGuard: authentication + double-submit CSRF.
  *
- * CSRF is checked BEFORE the @Public() early-return, because public mutating
- * endpoints that a logged-in user can reach are exactly the CSRF-prone ones.
+ * CSRF applies to AUTHENTICATED mutations only. @Public routes skip it: they
+ * do not rely on the ambient cookie, and checking it anyway meant a stale
+ * session cookie could 403 signup/login (on localhost the two portals share
+ * cookies across ports; this happened).
  */
 import { describe, expect, it, vi } from 'vitest';
 import { Reflector } from '@nestjs/core';
@@ -76,18 +78,28 @@ describe('AuthGuard — CSRF', () => {
   it('rejects a cookie-session mutation with no CSRF header', async () => {
     const { guard, ctx } = build({
       method: 'POST',
+      cookies: { rwa_admin_token: 'x', rwa_csrf: 'secret' },
+      verify: () => ({ sub: 'a1', typ: 'admin' }) as never,
+    });
+    await expect(guard.canActivate(ctx)).rejects.toMatchObject({ code: 'CSRF_FAILED' });
+  });
+
+  it('lets a PUBLIC mutation through despite a stale session cookie', async () => {
+    /* Signup/login with the OTHER portal's cookie present — must not 403. */
+    const { guard, ctx } = build({
+      method: 'POST',
       isPublic: true,
       cookies: { rwa_admin_token: 'x', rwa_csrf: 'secret' },
     });
-    await expect(guard.canActivate(ctx)).rejects.toMatchObject({ code: 'CSRF_FAILED' });
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
   });
 
   it('rejects a mismatched CSRF header', async () => {
     const { guard, ctx } = build({
       method: 'POST',
-      isPublic: true,
       cookies: { rwa_admin_token: 'x', rwa_csrf: 'secret' },
       headers: { 'x-csrf-token': 'wrong-value-x' },
+      verify: () => ({ sub: 'a1', typ: 'admin' }) as never,
     });
     await expect(guard.canActivate(ctx)).rejects.toMatchObject({ code: 'CSRF_FAILED' });
   });

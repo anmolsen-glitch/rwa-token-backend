@@ -233,11 +233,15 @@ export class SubscriptionsService {
       params: { offeringId, amountFiat, tokens: tokensWanted, reference },
     });
 
+    /* The crypto option: where to send and exactly how much, so the buy panel
+       can offer "pay from your wallet" without a second round-trip. */
+    const quote = this.cryptoQuote(offering.sellerWallet, String(amountFiat));
     return {
       ...result.sub,
       paymentRef: checkout.paymentRef,
       checkoutUrl: checkout.checkoutUrl,
       tokens: tokensWanted,
+      crypto: { payToWallet: quote.payToWallet, amountWei: quote.amountWei.toString() },
     };
   }
 

@@ -18,6 +18,7 @@ import { JwtService } from '@shared/auth/jwt.service';
 import { AppConfig } from '@shared/config/app-config.service';
 import { MAILER, type Mailer } from '@shared/mail/mailer';
 import type { Account, Investor, OnboardingStep, OtpPurpose } from '@shared/db/schema';
+import { PortfolioService } from '@modules/portfolio/portfolio.service';
 import { AccountRepository } from './account.repository';
 
 /** Same trick as admin login: constant-ish timing for unknown emails. */
@@ -43,6 +44,7 @@ export class AccountService {
     private readonly repo: AccountRepository,
     private readonly jwt: JwtService,
     private readonly config: AppConfig,
+    private readonly portfolio: PortfolioService,
     @Inject(MAILER) private readonly mailer: Mailer,
   ) {}
 
@@ -273,11 +275,33 @@ export class AccountService {
     return { token, account: AccountService.view(account, wallets) };
   }
 
-  async me(accountId: string): Promise<AccountView> {
+  async me(accountId: string) {
     const account = await this.repo.byId(accountId);
     if (!account) throw AppError.unauthorized('Account no longer exists.');
     const wallets = await this.repo.walletsFor(accountId);
-    return AccountService.view(account, wallets);
+    const view = AccountService.view(account, wallets);
+
+    /*
+     * The dashboard's identity + portfolio surface, merged in for parity with
+     * the Express /api/investor/me: the connected person's primary wallet,
+     * ONCHAINID, compliance standing, and holdings read from the CHAIN.
+     * Empty-but-present before a wallet exists, so `me.holdings` is always an
+     * array and step logic keeps working unchanged.
+     */
+    const primary = wallets[0]?.wallet ?? null;
+    const holdings = primary ? (await this.portfolio.portfolio(primary)).items : [];
+    return {
+      ...view,
+      address: primary,
+      primaryWallet: primary,
+      onchainid: wallets.find((w) => w.onchainid)?.onchainid ?? null,
+      amlStatus: account.amlStatus,
+      accreditationStatus: account.accreditationStatus,
+      accreditationNote: account.accreditationNote,
+      accredited: account.accreditationStatus === 'accredited',
+      kycSubmittedAt: account.kycSubmittedAt?.toISOString() ?? null,
+      holdings,
+    };
   }
 
   /**

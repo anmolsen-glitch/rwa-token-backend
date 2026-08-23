@@ -56,7 +56,8 @@ function make(acc: Account | undefined, wallets: Investor[] = [], production = f
     isDevelopment: !production,
   } as unknown as AppConfig;
   const mailer = { name: 'mock', send: vi.fn(async () => undefined) } as unknown as Mailer;
-  return { service: new AccountService(repo, jwt, config, mailer), repo, jwt, mailer, config };
+  const portfolio = { portfolio: vi.fn(async () => ({ items: [] })) } as never;
+  return { service: new AccountService(repo, jwt, config, portfolio, mailer), repo, jwt, mailer, config };
 }
 
 describe('flow position', () => {

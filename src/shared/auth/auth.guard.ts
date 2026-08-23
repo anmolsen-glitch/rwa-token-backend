@@ -45,8 +45,18 @@ export class AuthGuard implements CanActivate {
       ctx.getClass(),
     ]);
 
-    this.assertCsrf(req);
+    /*
+     * Public first, THEN CSRF. A @Public route does not rely on the ambient
+     * cookie for anything, so a stale session cookie must not be able to 403
+     * it — on localhost the admin and investor portals share cookies across
+     * ports, which made signup/login fail for anyone who had opened the admin
+     * console. Authenticated mutations are still CSRF-checked below, and the
+     * public login/signup handlers issue fresh sessions rather than trusting
+     * the presented cookie, so skipping the check there gives an attacker
+     * nothing.
+     */
     if (isPublic) return true;
+    this.assertCsrf(req);
 
     /*
      * Which session this route accepts. Defaults to 'admin', so the back-office
