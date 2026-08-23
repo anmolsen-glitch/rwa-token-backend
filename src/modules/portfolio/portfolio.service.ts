@@ -18,6 +18,7 @@ import { ChainService } from '@shared/chain/chain.service';
 import type { Principal, TenantContext } from '@shared/auth/tenant-context';
 import { TokensRepository } from '@modules/tokens/tokens.repository';
 import { OfferingsRepository } from '@modules/offerings/offerings.repository';
+import { OfferingViewService } from '@modules/offerings/offering-view.service';
 import { OnboardingService } from '@modules/onboarding/onboarding.service';
 import { AmlService } from '@modules/compliance/aml.service';
 import { SiweService } from '@modules/wallet/siwe.service';
@@ -55,6 +56,7 @@ export class PortfolioService {
     private readonly chain: ChainService,
     private readonly audit: AuditService,
     private readonly config: AppConfig,
+    private readonly views: OfferingViewService,
   ) {}
 
   /**
@@ -129,24 +131,9 @@ export class PortfolioService {
     const accredited = await this.onboarding.isAccredited(primary);
 
     const rows = await this.offerings.listVisibleToInvestor(accredited);
-    return {
-      accredited,
-      items: rows.map((o) => ({
-        id: o.id,
-        name: o.name,
-        status: o.status,
-        visibility: o.visibility,
-        tokenSymbol: o.tokenSymbol,
-        location: o.location,
-        currency: o.currency,
-        pricePerToken: o.pricePerToken,
-        minInvestment: o.minInvestment,
-        targetRaise: o.targetRaise,
-        yieldPct: o.yieldPct,
-        image: o.image,
-        requiresAccreditation: o.requiresAccreditation,
-      })),
-    };
+    /* The ENRICHED view, same as the public marketplace — the portal renders
+       supply/raised/NAV stats, not the raw row. */
+    return { accredited, items: await this.views.enrichAll(rows) };
   }
 
   /**

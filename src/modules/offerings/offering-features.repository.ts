@@ -99,6 +99,18 @@ export class OfferingFeaturesRepository {
   }
 
   /**
+   * The open buyback for the PUBLIC offering view. Worker connection: the
+   * marketplace has no tenant, and an open bid is marketing surface, not
+   * tenant-gated data.
+   */
+  async openBuybackAnyTenant(offeringId: string): Promise<BuybackOffer | undefined> {
+    const [row] = await this.db.worker('offerings: public buyback view', (tx) =>
+      tx.select().from(buybackOffers).where(eq(buybackOffers.offeringId, offeringId)).limit(1),
+    );
+    return row && row.status === 'open' ? row : undefined;
+  }
+
+  /**
    * Open or replace the standing bid. One per offering, so this upserts —
    * two live bids for the same asset would be ambiguous to a seller.
    */

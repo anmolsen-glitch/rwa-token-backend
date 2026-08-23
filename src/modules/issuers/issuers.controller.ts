@@ -47,12 +47,17 @@ export class IssuersController {
     return this.issuers.list(tenant);
   }
 
-  @ApiOperation({ summary: 'Get one issuer' })
+  @ApiOperation({
+    summary: 'Full SPV detail',
+    description:
+      'The issuer plus its assets, its SPV managers (each with the property managers ' +
+      'reporting to it), and any managers not yet under an SPV manager.',
+  })
   @ApiParam({ name: 'id', description: 'Issuer id' })
   @ApiNotFound('Issuer')
   @Get(':id')
   findOne(@Tenant() tenant: TenantContext, @Param('id') id: string) {
-    return this.issuers.findById(tenant, id);
+    return this.issuers.detail(tenant, id);
   }
 
   @ApiOperation({

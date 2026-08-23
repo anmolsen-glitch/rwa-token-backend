@@ -49,12 +49,14 @@ function build(overrides: Record<string, unknown> = {}) {
     findById: vi.fn(async () => ({ id: '2', kybStatus: 'approved', ownerWallet: '0x' + 'a'.repeat(40) })),
   };
   const deploy = { deploySuite: vi.fn() };
+  const views = { enrich: vi.fn(async (r: unknown) => r), enrichAll: vi.fn(async (r: unknown) => r) };
   const audit = { record: vi.fn(async () => ({})) };
   const config = { get: () => 'sepolia' };
   const svc = new OfferingsService(
     repo as never,
     issuers as never,
     deploy as never,
+    views as never,
     audit as never,
     config as never,
   );

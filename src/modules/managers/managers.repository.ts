@@ -21,6 +21,18 @@ export class ManagersRepository {
     );
   }
 
+  /** One issuer's managers — an explicit filter so a PLATFORM caller viewing a
+      specific SPV does not receive every tenant's roster. */
+  listForIssuer(t: TenantContext, issuerId: string): Promise<Manager[]> {
+    return this.db.scoped(t, (tx) =>
+      tx
+        .select()
+        .from(managers)
+        .where(eq(managers.issuerId, issuerId))
+        .orderBy(desc(managers.createdAt)),
+    );
+  }
+
   async findById(t: TenantContext, id: string): Promise<Manager | undefined> {
     const [row] = await this.db.scoped(t, (tx) =>
       tx.select().from(managers).where(eq(managers.id, id)).limit(1),

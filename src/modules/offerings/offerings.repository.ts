@@ -211,6 +211,51 @@ export class OfferingsRepository {
     );
   }
 
+  /** One issuer's offerings — the assets slice of the SPV detail panel. */
+  listForIssuer(tenant: TenantContext, issuerId: string): Promise<Offering[]> {
+    return this.db.scoped(tenant, (tx) =>
+      tx
+        .select()
+        .from(offerings)
+        .where(eq(offerings.issuerId, issuerId))
+        .orderBy(asc(offerings.sortOrder), asc(offerings.id)),
+    );
+  }
+
+  /**
+   * Holder count + tokens issued for a token, from the indexed balances.
+   * Worker read: these are the public marketplace's aggregate stats, the same
+   * numbers every visitor sees — not tenant-gated data.
+   */
+  async holderStats(tokenAddress: string): Promise<{ tokensIssued: number; holders: number }> {
+    const rows = await this.db.worker('offerings: holder stats', (tx) =>
+      tx.execute(sql`
+        SELECT COUNT(*)::int AS holders, COALESCE(SUM(balance),0) AS issued
+          FROM balances WHERE token = ${tokenAddress.toLowerCase()} AND balance <> 0
+      `),
+    );
+    const [row] = (Array.isArray(rows) ? rows : ((rows as { rows?: unknown[] }).rows ?? [])) as {
+      holders: number;
+      issued: string;
+    }[];
+    return { tokensIssued: Number(row?.issued ?? 0), holders: Number(row?.holders ?? 0) };
+  }
+
+  /** Realized income paid out for a token in a trailing window (view stat). */
+  async distributedIncome(tokenSymbol: string, sinceDays: number): Promise<number> {
+    const rows = await this.db.worker('offerings: realized income stat', (tx) =>
+      tx.execute(sql`
+        SELECT COALESCE(SUM(total_amount),0) AS t FROM distributions
+         WHERE token_symbol = ${tokenSymbol}
+           AND created_at > now() - (${String(sinceDays)} || ' days')::interval
+      `),
+    );
+    const [row] = (Array.isArray(rows) ? rows : ((rows as { rows?: unknown[] }).rows ?? [])) as {
+      t: string;
+    }[];
+    return Number(row?.t ?? 0);
+  }
+
   /**
    * Is a symbol already a deployed token on ANY issuer? Worker connection on
    * purpose: symbols are globally unique on-chain (the factory salt derives

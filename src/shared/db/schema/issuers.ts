@@ -1,5 +1,5 @@
 /** Mirrors migrations/011_issuers.sql — the tenant root. */
-import { pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { jsonb, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { bigintId } from './columns';
 
@@ -18,6 +18,8 @@ export const issuers = pgTable('issuers', {
   /* migration 047 — per-issuer reliance policy (TENANCY_MODEL §9). */
   acceptancePolicy: text('acceptance_policy').notNull().default('auto_accept'),
   kybNote: text('kyb_note'),
+  /** Freeform KYB dossier: representative, UBOs, documents, enquiry fields. */
+  details: jsonb('details'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

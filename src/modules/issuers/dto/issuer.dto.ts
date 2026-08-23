@@ -9,6 +9,12 @@ export const CreateIssuerSchema = z.object({
   contactEmail: z.string().trim().email().optional(),
   /* The token OWNER wallet — a multisig in production. */
   ownerWallet: wallet.optional(),
+  /* Operator-entered vehicle identifier + legal form. */
+  spvId: z.string().trim().max(100).nullish(),
+  spvType: z.string().trim().max(100).nullish(),
+  /* The KYB dossier (representative, UBOs, documents). Freeform on purpose —
+     the review screen owns its structure; updates MERGE onto what exists. */
+  details: z.record(z.string(), z.unknown()).optional(),
   /* kybStatus is deliberately absent: it moves only through the KYB endpoints,
      so an issuer cannot approve itself by sending a field. */
 });
@@ -30,5 +36,8 @@ export const ApplySchema = z.object({
   name: z.string().trim().min(1).max(200),
   legalEntity: z.string().trim().max(300).optional(),
   contactEmail: z.string().trim().email(),
+  /* The enquiry (property name, location, notes…). Stored on the issuer row
+     so the KYB reviewer sees what was actually applied with. */
+  details: z.record(z.string(), z.unknown()).optional(),
 });
 export class ApplyDto extends createZodDto(ApplySchema) {}

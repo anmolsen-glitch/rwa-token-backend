@@ -88,6 +88,26 @@ export class ManagersService {
    * marketing surface, and showing a suspended operator alongside live assets
    * misrepresents who is running them.
    */
+  /**
+   * The light public card an offering view embeds: who operates this asset.
+   * Null (not 404) when missing or suspended — the offering still lists.
+   */
+  async publicCard(
+    id: string,
+  ): Promise<{ id: string; name: string; company: string | null; bio: string | null; logoUrl: string | null; contactEmail: string | null } | null> {
+    const platform: TenantContext = { kind: 'platform' };
+    const row = await this.repo.findById(platform, id);
+    if (!row || row.status !== 'active') return null;
+    return {
+      id: row.id,
+      name: row.name,
+      company: row.company,
+      bio: row.bio,
+      logoUrl: row.logoUrl,
+      contactEmail: row.contactEmail,
+    };
+  }
+
   async publicProfile(id: string): Promise<ManagerView & { properties: unknown[] }> {
     const platform: TenantContext = { kind: 'platform' };
     const row = await this.repo.findById(platform, id);

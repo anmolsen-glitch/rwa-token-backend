@@ -51,6 +51,24 @@ export class TokensRepository {
    * the order itself already names the token, and the signature is the
    * authorization. Never call this from a request handler.
    */
+  /** Non-throwing variant of requireAnyTenant — for views where a missing
+      token just means "not deployed yet", not an error. */
+  async findAnyTenant(symbol: string): Promise<Token | undefined> {
+    const [row] = await this.db.worker('tokens: view lookup', (tx) =>
+      tx
+        .select()
+        .from(tokens)
+        .where(
+          and(
+            eq(tokens.network, this.config.get('NETWORK')),
+            sql`upper(${tokens.symbol}) = upper(${symbol})`,
+          ),
+        )
+        .limit(1),
+    );
+    return row;
+  }
+
   async requireAnyTenant(symbol: string): Promise<Token> {
     const [row] = await this.db.worker('tokens: settlement lookup', (tx) =>
       tx

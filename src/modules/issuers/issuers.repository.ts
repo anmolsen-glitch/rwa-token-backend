@@ -24,7 +24,15 @@ export class IssuersRepository {
 
   async create(
     tenant: TenantContext,
-    input: { name: string; legalEntity?: string; contactEmail?: string; ownerWallet?: string },
+    input: {
+      name: string;
+      legalEntity?: string;
+      contactEmail?: string;
+      ownerWallet?: string;
+      spvId?: string | null;
+      spvType?: string | null;
+      details?: Record<string, unknown>;
+    },
   ): Promise<Issuer> {
     const [row] = await this.db.scoped(tenant, (tx) =>
       tx
@@ -34,6 +42,9 @@ export class IssuersRepository {
           legalEntity: input.legalEntity ?? null,
           contactEmail: input.contactEmail ?? null,
           ownerWallet: input.ownerWallet ?? null,
+          spvId: input.spvId ?? null,
+          spvType: input.spvType ?? null,
+          details: input.details ?? {},
           /* Always starts unapproved. An issuer that could self-approve its own
              KYB is not KYB at all. */
           kybStatus: 'pending_review',
@@ -46,13 +57,29 @@ export class IssuersRepository {
   async update(
     tenant: TenantContext,
     id: string,
-    patch: { name?: string; legalEntity?: string; contactEmail?: string; ownerWallet?: string },
+    patch: {
+      name?: string;
+      legalEntity?: string;
+      contactEmail?: string;
+      ownerWallet?: string;
+      spvId?: string | null;
+      spvType?: string | null;
+      details?: Record<string, unknown>;
+    },
   ): Promise<Issuer | undefined> {
     const set: Record<string, unknown> = { updatedAt: new Date() };
     if (patch.name !== undefined) set.name = patch.name;
     if (patch.legalEntity !== undefined) set.legalEntity = patch.legalEntity;
     if (patch.contactEmail !== undefined) set.contactEmail = patch.contactEmail;
     if (patch.ownerWallet !== undefined) set.ownerWallet = patch.ownerWallet;
+    if (patch.spvId !== undefined) set.spvId = patch.spvId;
+    if (patch.spvType !== undefined) set.spvType = patch.spvType;
+    if (patch.details !== undefined) {
+      /* MERGE, never replace: a public application's enquiry fields
+         (propertyName, source, …) must survive the operator filling in the
+         KYB dossier — same semantics as the Express updateIssuerKyb. */
+      set.details = sql`COALESCE(${issuers.details}, '{}'::jsonb) || ${JSON.stringify(patch.details)}::jsonb`;
+    }
 
     const [row] = await this.db.scoped(tenant, (tx) =>
       tx.update(issuers).set(set).where(eq(issuers.id, id)).returning(),
@@ -91,6 +118,7 @@ export class IssuersRepository {
     name: string;
     legalEntity?: string;
     contactEmail: string;
+    details?: Record<string, unknown>;
   }): Promise<Issuer> {
     const [row] = await this.db.worker('issuers: public application', (tx) =>
       tx
@@ -99,6 +127,9 @@ export class IssuersRepository {
           name: input.name,
           legalEntity: input.legalEntity ?? null,
           contactEmail: input.contactEmail,
+          /* The source marker is what tells the review screen this arrived via
+             the public "list your property" form. Same as Express apply(). */
+          details: { ...(input.details ?? {}), source: 'public-application' },
           kybStatus: 'pending_review',
         })
         .returning(),

@@ -10,13 +10,14 @@ import { InvestorFeaturesController, PublicOfferingFeaturesController } from './
 import { OfferingFeaturesRepository } from './offering-features.repository';
 import { OfferingFeaturesService } from './offering-features.service';
 import { IssuerAssetsController, OfferingsController, PublicOfferingsController } from './offerings.controller';
+import { OfferingViewService } from './offering-view.service';
 import { OfferingsRepository } from './offerings.repository';
 import { OfferingsService } from './offerings.service';
 
 @Module({
-  imports: [IssuersModule, TokensModule, OnboardingModule, ManagersModule, forwardRef(() => SubscriptionsModule)],
+  imports: [forwardRef(() => IssuersModule), TokensModule, OnboardingModule, ManagersModule, forwardRef(() => SubscriptionsModule)],
   controllers: [OfferingsController, IssuerAssetsController, PublicOfferingsController, OfferingFeaturesController, ProposalsController, PublicOfferingFeaturesController, InvestorFeaturesController],
-  providers: [OfferingsService, OfferingsRepository, DeployService, OfferingFeaturesService, OfferingFeaturesRepository],
-  exports: [OfferingsService, OfferingsRepository],
+  providers: [OfferingsService, OfferingsRepository, DeployService, OfferingViewService, OfferingFeaturesService, OfferingFeaturesRepository],
+  exports: [OfferingsService, OfferingsRepository, OfferingViewService],
 })
 export class OfferingsModule {}

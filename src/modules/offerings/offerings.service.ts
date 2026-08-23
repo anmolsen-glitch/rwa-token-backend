@@ -7,6 +7,7 @@ import type { Offering } from '@shared/db/schema';
 import { IssuersRepository } from '@modules/issuers/issuers.repository';
 import { DeployService } from './deploy.service';
 import { OfferingsRepository, type NewOfferingInput } from './offerings.repository';
+import { OfferingViewService, type EnrichedOffering } from './offering-view.service';
 import type { CreateAssetDto } from './dto/create-asset.dto';
 
 /** Documents the wizard collects on an asset before it can be listed. */
@@ -43,6 +44,7 @@ export class OfferingsService {
     private readonly repo: OfferingsRepository,
     private readonly issuers: IssuersRepository,
     private readonly deploy: DeployService,
+    private readonly views: OfferingViewService,
     private readonly audit: AuditService,
     private readonly config: AppConfig,
   ) {}
@@ -75,22 +77,25 @@ export class OfferingsService {
     };
   }
 
-  async list(tenant: TenantContext): Promise<{ items: OfferingView[] }> {
+  /* List/detail return the ENRICHED view (offering-view.service.ts): both
+     portals render the computed stats — issued/available supply, raised,
+     holders, NAV — not the raw row. */
+  async list(tenant: TenantContext): Promise<{ items: EnrichedOffering[] }> {
     const rows = await this.repo.list(tenant);
-    return { items: rows.map(OfferingsService.view) };
+    return { items: await this.views.enrichAll(rows) };
   }
 
-  async listPublic(): Promise<{ items: OfferingView[] }> {
+  async listPublic(): Promise<{ items: EnrichedOffering[] }> {
     const rows = await this.repo.listPublic();
-    return { items: rows.map(OfferingsService.view) };
+    return { items: await this.views.enrichAll(rows) };
   }
 
-  async findById(tenant: TenantContext, id: string): Promise<OfferingView> {
+  async findById(tenant: TenantContext, id: string): Promise<EnrichedOffering> {
     const row = await this.repo.findById(tenant, id);
     /* 404 rather than 403 when it exists but belongs to another issuer:
        "this id exists but is not yours" is itself a cross-tenant disclosure. */
     if (!row) throw AppError.notFound('Offering', id);
-    return OfferingsService.view(row);
+    return this.views.enrich(row);
   }
 
   /**

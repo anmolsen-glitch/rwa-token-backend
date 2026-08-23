@@ -1,8 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { forwardRef, Inject, Injectable } from '@nestjs/common';
 import { AppError } from '@shared/errors/app-error';
 import { AuditService } from '@shared/audit/audit.service';
 import { isPlatform, type Principal, type TenantContext } from '@shared/auth/tenant-context';
 import type { Issuer } from '@shared/db/schema';
+import { OfferingsRepository } from '@modules/offerings/offerings.repository';
+import { SpvManagersService } from '@modules/spv-managers/spv-managers.service';
+import { ManagersRepository } from '@modules/managers/managers.repository';
 import { IssuersRepository } from './issuers.repository';
 
 export interface IssuerView {
@@ -11,8 +14,13 @@ export interface IssuerView {
   legalEntity: string | null;
   contactEmail: string | null;
   ownerWallet: string | null;
+  spvId: string | null;
+  spvType: string | null;
   kybStatus: string;
+  kybNote: string | null;
   acceptancePolicy: string;
+  /** The KYB dossier — representative, UBOs, documents, enquiry fields. */
+  details: Record<string, unknown>;
   createdAt: string;
 }
 
@@ -39,6 +47,12 @@ export class IssuersService {
   constructor(
     private readonly repo: IssuersRepository,
     private readonly audit: AuditService,
+    /* forwardRef: offerings and spv-managers both import THIS module. */
+    @Inject(forwardRef(() => OfferingsRepository))
+    private readonly offerings: OfferingsRepository,
+    @Inject(forwardRef(() => SpvManagersService))
+    private readonly spvManagers: SpvManagersService,
+    private readonly managers: ManagersRepository,
   ) {}
 
   private static view(i: Issuer): IssuerView {
@@ -48,8 +62,12 @@ export class IssuersService {
       legalEntity: i.legalEntity,
       contactEmail: i.contactEmail,
       ownerWallet: i.ownerWallet,
+      spvId: i.spvId,
+      spvType: i.spvType,
       kybStatus: i.kybStatus,
+      kybNote: i.kybNote,
       acceptancePolicy: i.acceptancePolicy,
+      details: (i.details ?? {}) as Record<string, unknown>,
       createdAt: i.createdAt.toISOString(),
     };
   }
@@ -97,7 +115,15 @@ export class IssuersService {
   async create(
     principal: Principal,
     tenant: TenantContext,
-    input: { name: string; legalEntity?: string; contactEmail?: string; ownerWallet?: string },
+    input: {
+      name: string;
+      legalEntity?: string;
+      contactEmail?: string;
+      ownerWallet?: string;
+      spvId?: string | null;
+      spvType?: string | null;
+      details?: Record<string, unknown>;
+    },
   ): Promise<IssuerView> {
     if (!isPlatform(tenant)) {
       throw AppError.forbidden('Only the platform can create an issuer.');
@@ -122,7 +148,15 @@ export class IssuersService {
     principal: Principal,
     tenant: TenantContext,
     id: string,
-    patch: { name?: string; legalEntity?: string; contactEmail?: string; ownerWallet?: string },
+    patch: {
+      name?: string;
+      legalEntity?: string;
+      contactEmail?: string;
+      ownerWallet?: string;
+      spvId?: string | null;
+      spvType?: string | null;
+      details?: Record<string, unknown>;
+    },
   ): Promise<IssuerView> {
     if (tenant.kind === 'issuer' && tenant.issuerId !== id) {
       throw AppError.notFound('Issuer', id);
@@ -194,8 +228,60 @@ export class IssuersService {
     name: string;
     legalEntity?: string;
     contactEmail: string;
+    details?: Record<string, unknown>;
   }): Promise<{ ok: true; status: 'pending_review' }> {
     await this.repo.applyAsNewIssuer(input);
     return { ok: true, status: 'pending_review' };
+  }
+
+  /**
+   * The full SPV panel: the issuer plus its assets and its management layer.
+   *
+   * Composed here (issuers is the tenant root) from the offerings and manager
+   * modules — the module cycle this creates is broken with forwardRef, same as
+   * offerings <-> subscriptions.
+   */
+  async detail(tenant: TenantContext, id: string) {
+    if (tenant.kind === 'issuer' && tenant.issuerId !== id) {
+      throw AppError.notFound('Issuer', id);
+    }
+    const issuer = await this.repo.findById(tenant, id);
+    if (!issuer) throw AppError.notFound('Issuer', id);
+
+    const [offerings, spvRows, managerRows] = await Promise.all([
+      this.offerings.listForIssuer(tenant, id),
+      this.spvManagers.list(tenant, id),
+      this.managers.listForIssuer(tenant, id),
+    ]);
+
+    const managerRef = (m: (typeof managerRows)[number]) => ({
+      id: m.id,
+      name: m.name,
+      company: m.company,
+      contactEmail: m.contactEmail,
+      status: m.status,
+      hasLogin: m.adminId != null,
+      spvManagerId: m.spvManagerId,
+    });
+
+    return {
+      issuer: IssuersService.view(issuer),
+      assets: offerings.map((o) => ({
+        id: o.id,
+        name: o.name,
+        tokenSymbol: o.tokenSymbol,
+        status: o.status,
+        location: o.location,
+        managerId: o.managerId ?? null,
+      })),
+      spvManagers: spvRows.items.map((s) => ({
+        ...s,
+        managers: managerRows
+          .filter((m) => String(m.spvManagerId) === String(s.id))
+          .map(managerRef),
+      })),
+      /* Managers running this SPV's assets not under any SPV manager yet. */
+      unassignedManagers: managerRows.filter((m) => m.spvManagerId == null).map(managerRef),
+    };
   }
 }
