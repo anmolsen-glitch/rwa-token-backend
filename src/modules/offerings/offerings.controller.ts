@@ -7,6 +7,7 @@ import { Body, Controller, Delete, forwardRef, Get, HttpCode, Inject, Param, Pat
 import { CurrentUser, Public, Roles, Tenant } from '@shared/auth/decorators';
 import type { Principal, TenantContext } from '@shared/auth/tenant-context';
 import { ApiConflict, ApiUnprocessable, ApiValidationError } from '@shared/openapi/api-error.decorator';
+import { NumericIdPipe } from '@shared/pipes/numeric-id.pipe';
 import { SubscriptionsService } from '@modules/subscriptions/subscriptions.service';
 import { OfferingsService } from './offerings.service';
 import {
@@ -15,6 +16,7 @@ import {
   StatusDto,
   UpdateOfferingDto,
 } from './dto/offering.dto';
+import { CreateAssetDto } from './dto/create-asset.dto';
 import { ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 import { ApiAuthErrors, ApiNotFound } from '@shared/openapi/api-error.decorator';
 
@@ -164,6 +166,45 @@ export class OfferingsController {
   @Post(':id/close')
   close(@CurrentUser() p: Principal, @Tenant() t: TenantContext, @Param('id') id: string) {
     return this.subscriptions.closeOffering(p, t, id);
+  }
+}
+
+/**
+ * Asset creation — the wizard's one call. Lives in the offerings module (the
+ * thing it creates is an offering) but keeps the issuer-scoped path so the
+ * intended tenant is visible in the URL; the segment is a FILTER that must
+ * agree with the caller's token, never a source of authority.
+ */
+@ApiTags('Offerings')
+@ApiAuthErrors()
+@Roles('issuer_admin')
+@Controller('admin/issuers/:issuerId/assets')
+export class IssuerAssetsController {
+  constructor(private readonly offerings: OfferingsService) {}
+
+  @ApiOperation({
+    summary: 'Create an asset (listing + token plan)',
+    description:
+      'Creates the LISTING and records the token plan; it never touches the chain. ' +
+      'Deploy afterwards with POST /api/admin/offerings/:id/deploy-token, which is safe ' +
+      'to retry — the two commits cannot be atomic, so the durable record goes first ' +
+      'and nothing is orphaned if a deploy fails. Requires approved KYB, an issuer ' +
+      'owner wallet, and all three listing documents.',
+  })
+  @ApiParam({ name: 'issuerId' })
+  @ApiValidationError()
+  @ApiNotFound('Issuer')
+  @ApiConflict('Symbol or offering already exists.', 'TOKEN_SYMBOL_EXISTS')
+  @ApiUnprocessable('A listing rule failed (documents, supply cross-check, owner wallet).', 'MISSING_DOCUMENTS')
+  @HttpCode(201)
+  @Post()
+  create(
+    @CurrentUser() p: Principal,
+    @Tenant() t: TenantContext,
+    @Param('issuerId', NumericIdPipe) issuerId: string,
+    @Body() dto: CreateAssetDto,
+  ) {
+    return this.offerings.createAsset(p, t, issuerId, dto);
   }
 }
 

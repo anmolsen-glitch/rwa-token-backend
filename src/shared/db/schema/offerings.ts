@@ -49,6 +49,18 @@ export const offerings = pgTable('offerings', {
   minimumRaise: numeric('minimum_raise'),
   /** Where a crypto payment for this asset goes — the seller's own wallet. */
   sellerWallet: text('seller_wallet'),
+
+  /* Property taxonomy + listing detail (migrations 020/029/031). */
+  propertyType: text('property_type'),
+  cashFlowing: boolean('cash_flowing').notNull().default(false),
+  occupancyPct: numeric('occupancy_pct'),
+  ownerOccupied: boolean('owner_occupied').notNull().default(false),
+  retainedPct: numeric('retained_pct'),
+  currentValuation: numeric('current_valuation'),
+  valuationUpdatedAt: timestamp('valuation_updated_at', { withTimezone: true }),
+  images: text('images').array(),
+  /** [{ type, name?, url? }] — the wizard's required listing documents. */
+  documents: jsonb('documents'),
   sortOrder: integer('sort_order').notNull().default(0),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

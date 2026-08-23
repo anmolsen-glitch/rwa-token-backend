@@ -9,13 +9,13 @@ import { OfferingFeaturesController, ProposalsController } from './offering-feat
 import { InvestorFeaturesController, PublicOfferingFeaturesController } from './offering-features-public.controller';
 import { OfferingFeaturesRepository } from './offering-features.repository';
 import { OfferingFeaturesService } from './offering-features.service';
-import { OfferingsController, PublicOfferingsController } from './offerings.controller';
+import { IssuerAssetsController, OfferingsController, PublicOfferingsController } from './offerings.controller';
 import { OfferingsRepository } from './offerings.repository';
 import { OfferingsService } from './offerings.service';
 
 @Module({
   imports: [IssuersModule, TokensModule, OnboardingModule, ManagersModule, forwardRef(() => SubscriptionsModule)],
-  controllers: [OfferingsController, PublicOfferingsController, OfferingFeaturesController, ProposalsController, PublicOfferingFeaturesController, InvestorFeaturesController],
+  controllers: [OfferingsController, IssuerAssetsController, PublicOfferingsController, OfferingFeaturesController, ProposalsController, PublicOfferingFeaturesController, InvestorFeaturesController],
   providers: [OfferingsService, OfferingsRepository, DeployService, OfferingFeaturesService, OfferingFeaturesRepository],
   exports: [OfferingsService, OfferingsRepository],
 })

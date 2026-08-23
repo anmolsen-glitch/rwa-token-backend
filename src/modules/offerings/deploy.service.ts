@@ -97,6 +97,8 @@ export class DeployService {
       this.logger.warn(
         `deploy: ${input.symbol} already on-chain at ${existing} but missing from our records — adopting instead of redeploying`,
       );
+      /* An interrupted deploy most likely died before the unpause — finish it. */
+      await this.unpauseIfNeeded(input.symbol, existing);
       return { address: existing, adopted: true };
     }
 
@@ -138,6 +140,22 @@ export class DeployService {
     if (!address || address === ethers.ZeroAddress) {
       throw new AppError('DEPLOY_FAILED', 502, 'Suite deployed but the token address is empty.');
     }
+    await this.unpauseIfNeeded(input.symbol, address);
     return { address, adopted: false };
+  }
+
+  /**
+   * The factory deploys tokens PAUSED. Unpause with the platform agent (set as
+   * a token agent at deploy) so settlement can mint without a manual step.
+   * Conditional, so both the fresh-deploy and adoption paths can re-run it.
+   * Ported from ../rwa-token-backend/src/services/deploy.service.ts finishSuite.
+   */
+  private async unpauseIfNeeded(symbol: string, address: string): Promise<void> {
+    if ((await this.chain.token(address).paused()) as boolean) {
+      const writer = this.chain.token(address, this.signers.get('agent'));
+      await this.tx.submit(`unpause ${symbol}`, () =>
+        writer.unpause() as Promise<ethers.ContractTransactionResponse>,
+      );
+    }
   }
 }

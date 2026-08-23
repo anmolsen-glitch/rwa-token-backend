@@ -7,6 +7,10 @@ import type { Offering } from '@shared/db/schema';
 import { IssuersRepository } from '@modules/issuers/issuers.repository';
 import { DeployService } from './deploy.service';
 import { OfferingsRepository, type NewOfferingInput } from './offerings.repository';
+import type { CreateAssetDto } from './dto/create-asset.dto';
+
+/** Documents the wizard collects on an asset before it can be listed. */
+export const REQUIRED_ASSET_DOCS = ['Title Deed', 'Valuation Report', 'SPV Ownership Proof'] as const;
 
 /**
  * Wire shape for an offering.
@@ -207,7 +211,7 @@ export class OfferingsService {
     principal: Principal,
     tenant: TenantContext,
     id: string,
-    input: { symbol: string; decimals: number; maxHolders: number; lockupDays: number },
+    input: { symbol: string; decimals: number; maxHolders?: number; lockupDays?: number },
   ) {
     const issuerId = OfferingsService.issuerIdOf(tenant);
     const offering = await this.repo.findById(tenant, id);
@@ -216,6 +220,13 @@ export class OfferingsService {
       throw AppError.conflict(
         'ALREADY_DEPLOYED',
         `This offering already has token ${offering.tokenSymbol}.`,
+      );
+    }
+    if (await this.repo.tokenSymbolInUse(input.symbol)) {
+      throw AppError.conflict(
+        'TOKEN_SYMBOL_EXISTS',
+        `A token "${input.symbol}" already exists.`,
+        { symbol: input.symbol },
       );
     }
 
@@ -233,13 +244,23 @@ export class OfferingsService {
       );
     }
 
+    /* Fall back to what the create-asset wizard recorded, so deploying is a
+       one-click confirmation of choices already made, not a re-entry of them.
+       The accredited-only flag comes from the COLUMN — never the plan. */
+    const plan = (offering.tokenPlan ?? {}) as {
+      tokenName?: string;
+      maxHolders?: number;
+      lockupDays?: number;
+      intendedStatus?: string;
+    };
+
     const { address, adopted } = await this.deploy.deploySuite({
-      name: offering.name,
+      name: plan.tokenName?.trim() || offering.name,
       symbol: input.symbol,
       decimals: input.decimals,
       ownerWallet: issuer.ownerWallet,
-      maxHolders: input.maxHolders,
-      lockupDays: input.lockupDays,
+      maxHolders: input.maxHolders ?? plan.maxHolders ?? 500,
+      lockupDays: input.lockupDays ?? plan.lockupDays ?? 0,
       requiresAccreditation: offering.requiresAccreditation,
     });
 
@@ -251,6 +272,13 @@ export class OfferingsService {
     });
     await this.repo.setTokenSymbol(tenant, id, input.symbol);
 
+    /* A listing created as "Live" waited at coming_soon because it had no
+       token to invest in. It has one now — apply the operator's original
+       choice. */
+    if (plan.intendedStatus === 'open' && offering.status === 'coming_soon') {
+      await this.repo.update(tenant, id, { status: 'open' });
+    }
+
     await this.audit.record(principal, tenant, {
       action: 'offering.deploy_token',
       target: id,
@@ -258,5 +286,154 @@ export class OfferingsService {
     });
 
     return { offeringId: id, symbol: input.symbol, address, adopted };
+  }
+
+  /**
+   * Create an asset from the wizard: the LISTING plus a recorded token PLAN.
+   *
+   * Ported from ../rwa-token-backend/src/services/issuers.service.ts
+   * createAsset — minus the `deployNow` one-shot, deliberately. The two commits
+   * (Postgres row, on-chain suite) cannot be atomic, so the durable record goes
+   * first and the deploy is its own retryable step (`deployToken` above, whose
+   * adoption path recovers an interrupted attempt). A single request doing both
+   * is the shape that needed a write-ahead `pending_deploys` table and a
+   * recovery sweeper; splitting the steps removes that failure mode instead of
+   * managing it.
+   *
+   * The issuer named in the PATH is a filter that must agree with the caller's
+   * tenant — an issuer may only name itself; the platform operator may name
+   * anyone (audited, like every platform action).
+   */
+  async createAsset(
+    principal: Principal,
+    tenant: TenantContext,
+    issuerId: string,
+    input: CreateAssetDto,
+  ) {
+    if (tenant.kind === 'issuer' && tenant.issuerId !== issuerId) {
+      /* 404, not 403: "that issuer exists but is not yours" is a disclosure. */
+      throw AppError.notFound('Issuer', issuerId);
+    }
+    if (tenant.kind !== 'issuer' && tenant.kind !== 'platform') {
+      throw AppError.forbidden('Only issuer or platform staff can create assets.');
+    }
+
+    if (input.deployNow) {
+      throw AppError.unprocessable(
+        'DEPLOY_IS_SEPARATE',
+        'Asset creation no longer deploys in the same request. Create the listing, then call POST /api/admin/offerings/:id/deploy-token — it is safe to retry.',
+      );
+    }
+
+    const issuer = await this.issuers.findById(tenant, issuerId);
+    if (!issuer) throw AppError.notFound('Issuer', issuerId);
+    if (issuer.kybStatus !== 'approved') {
+      throw AppError.conflict(
+        'KYB_NOT_APPROVED',
+        'Issuer KYB must be approved before listing an asset.',
+        { kybStatus: issuer.kybStatus },
+      );
+    }
+    if (!issuer.ownerWallet) {
+      throw AppError.unprocessable(
+        'NO_OWNER_WALLET',
+        'Set the issuer owner wallet first — it becomes the token owner on-chain.',
+      );
+    }
+
+    /* Supply is DERIVED from targetRaise / pricePerToken. A stated total that
+       disagrees means the operator was shown one number while the platform
+       would enforce another — reject rather than silently pick one. */
+    if (input.totalTokens != null) {
+      const price = Number(input.pricePerToken);
+      if (!(price > 0)) {
+        throw AppError.unprocessable('PRICE_REQUIRED', 'Price per token must be greater than zero.');
+      }
+      const derived = Number(input.targetRaise) / price;
+      if (Math.abs(derived - input.totalTokens) > 0.5) {
+        throw AppError.unprocessable(
+          'SUPPLY_MISMATCH',
+          `Total tokens (${input.totalTokens}) doesn't match the raise: ${input.targetRaise} / ${input.pricePerToken} = ${Math.round(derived)}.`,
+        );
+      }
+    }
+
+    /* Every required document must be present WITH a URL before listing. */
+    const provided = new Map((input.documents ?? []).map((d) => [d.type, d]));
+    const missing = REQUIRED_ASSET_DOCS.filter((t) => !provided.get(t)?.url);
+    if (missing.length) {
+      throw AppError.unprocessable(
+        'MISSING_DOCUMENTS',
+        `Missing required document(s): ${missing.join(', ')}.`,
+        { missing },
+      );
+    }
+
+    const symbol = input.symbol.trim().toUpperCase();
+    const id = symbol.toLowerCase();
+
+    /* Fail early if the symbol is already spoken for, not at deploy time. */
+    if (await this.repo.tokenSymbolInUse(symbol)) {
+      throw AppError.conflict('TOKEN_SYMBOL_EXISTS', `A token "${symbol}" already exists.`, {
+        symbol,
+      });
+    }
+    if (await this.repo.findById(tenant, id)) {
+      throw AppError.conflict('OFFERING_EXISTS', `An offering with id "${id}" already exists.`);
+    }
+
+    /* Everything the deploy step will need, plus the status to apply once a
+       token exists — an offering cannot be `open` before it can be invested
+       in, so a wizard asking for "Live" records the intent here and
+       deployToken applies it. */
+    const tokenPlan = {
+      symbol,
+      tokenName: input.tokenName?.trim() || input.name,
+      maxHolders: input.maxHolders ?? 500,
+      lockupDays: input.lockupDays ?? 0,
+      requiresAccreditation: input.requiresAccreditation === true,
+      intendedStatus: input.status ?? 'open',
+    };
+
+    const row = await this.repo.create(tenant, issuerId, {
+      id,
+      name: input.name,
+      location: input.location ?? null,
+      assetType: input.assetType ?? null,
+      image: input.image ?? input.images?.[0] ?? null,
+      description: input.description ?? null,
+      currency: input.currency,
+      pricePerToken: input.pricePerToken,
+      minInvestment: input.minInvestment,
+      maxInvestment: input.maxInvestment ?? null,
+      accreditedMaxInvestment: input.accreditedMaxInvestment ?? null,
+      requiresAccreditation: input.requiresAccreditation === true,
+      targetRaise: input.targetRaise,
+      minimumRaise: input.minimumRaise ?? null,
+      yieldPct: input.yieldPct ?? null,
+      country: input.country,
+      visibility: input.visibility === 'private' ? 'private' : 'public',
+      propertyType: input.propertyType ?? null,
+      occupancyPct: input.occupancyPct ?? null,
+      ownerOccupied: input.ownerOccupied === true,
+      sellerWallet: input.sellerWallet ?? null,
+      retainedPct: input.retainedPct ?? null,
+      currentValuation: input.propertyValue ?? null,
+      images: input.images ?? [],
+      documents: input.documents ?? [],
+      tokenPlan,
+    });
+
+    await this.audit.record(principal, tenant, {
+      action: 'asset.create',
+      target: issuerId,
+      params: { symbol, name: input.name, deployed: false },
+    });
+
+    return {
+      token: null,
+      offering: OfferingsService.view(row),
+      nextStep: 'Deploy the token from Offerings → Deploy token.',
+    };
   }
 }

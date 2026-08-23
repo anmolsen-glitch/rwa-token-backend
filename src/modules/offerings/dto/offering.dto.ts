@@ -36,8 +36,9 @@ export const DeployTokenSchema = z.object({
   symbol: z.string().trim().regex(/^[A-Z0-9]{2,12}$/, 'Uppercase alphanumeric, 2-12 chars'),
   /* Whole tokens only — the payout allocator assumes decimals === 0. */
   decimals: z.coerce.number().int().min(0).max(0).default(0),
-  maxHolders: z.coerce.number().int().positive().default(1000),
-  lockupDays: z.coerce.number().int().min(0).default(0),
+  /* Absent = the create-asset wizard's recorded token plan, then 500 / 0. */
+  maxHolders: z.coerce.number().int().positive().optional(),
+  lockupDays: z.coerce.number().int().min(0).optional(),
 });
 export class DeployTokenDto extends createZodDto(DeployTokenSchema) {}
 

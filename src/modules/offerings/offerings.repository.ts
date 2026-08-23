@@ -33,6 +33,17 @@ export interface NewOfferingInput {
   accreditedMaxInvestment?: string | null;
   minimumRaise?: string | null;
   requiresAccreditation?: boolean;
+  /* Listing detail + token plan, written by the asset-creation wizard. */
+  visibility?: string;
+  propertyType?: string | null;
+  occupancyPct?: string | null;
+  ownerOccupied?: boolean;
+  sellerWallet?: string | null;
+  retainedPct?: string | null;
+  currentValuation?: string | null;
+  images?: string[];
+  documents?: unknown;
+  tokenPlan?: unknown;
 }
 
 @Injectable()
@@ -198,5 +209,21 @@ export class OfferingsRepository {
     await this.db.scoped(tenant, (tx) =>
       tx.insert(tokens).values(t).onConflictDoNothing(),
     );
+  }
+
+  /**
+   * Is a symbol already a deployed token on ANY issuer? Worker connection on
+   * purpose: symbols are globally unique on-chain (the factory salt derives
+   * from them), so the check must see across tenants or it cannot answer.
+   */
+  async tokenSymbolInUse(symbol: string): Promise<boolean> {
+    const rows = await this.db.worker('offerings: symbol uniqueness check', (tx) =>
+      tx
+        .select({ symbol: tokens.symbol })
+        .from(tokens)
+        .where(sql`upper(${tokens.symbol}) = upper(${symbol})`)
+        .limit(1),
+    );
+    return rows.length > 0;
   }
 }
