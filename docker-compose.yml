@@ -1,0 +1,29 @@
+# Local Postgres for the RWA backend.
+#   docker compose up -d        # start in the background
+#   docker compose logs -f db   # watch logs
+#   docker compose down         # stop (data persists in the named volume)
+#   docker compose down -v      # stop AND wipe the database
+#
+# Connection string (matches DATABASE_URL in .env.example):
+#   postgres://rwa:rwa@localhost:5432/rwa
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: rwa-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rwa
+      POSTGRES_PASSWORD: rwa
+      POSTGRES_DB: rwa
+    ports:
+      - "5432:5432"
+    volumes:
+      - rwa-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rwa -d rwa"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  rwa-pgdata:
