@@ -78,8 +78,15 @@ async function bootstrap(): Promise<void> {
   });
 
   await app.register(helmet, { contentSecurityPolicy: isProd });
+  const allowedOrigins = config.get('CORS_ORIGINS');
   await app.register(cors, {
-    origin: config.get('CORS_ORIGINS'),
+    origin: (origin, cb) => {
+      if (!origin || !isProd || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+        cb(null, true);
+      } else {
+        cb(new Error(`Not allowed by CORS: ${origin}`), false);
+      }
+    },
     credentials: true, // required: sessions are cookie-based
   });
   await app.register(cookie);
