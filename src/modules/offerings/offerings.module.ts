@@ -13,11 +13,20 @@ import { IssuerAssetsController, OfferingsController, PublicOfferingsController 
 import { OfferingViewService } from './offering-view.service';
 import { OfferingsRepository } from './offerings.repository';
 import { OfferingsService } from './offerings.service';
+import { OfferingsSyncWorker } from './offerings-sync.worker';
+import { BullModule } from '@nestjs/bullmq';
 
 @Module({
-  imports: [forwardRef(() => IssuersModule), TokensModule, OnboardingModule, ManagersModule, forwardRef(() => SubscriptionsModule)],
+  imports: [
+    forwardRef(() => IssuersModule),
+    TokensModule,
+    OnboardingModule,
+    ManagersModule,
+    forwardRef(() => SubscriptionsModule),
+    BullModule.registerQueue({ name: 'offerings-sync' }),
+  ],
   controllers: [OfferingsController, IssuerAssetsController, PublicOfferingsController, OfferingFeaturesController, ProposalsController, PublicOfferingFeaturesController, InvestorFeaturesController],
-  providers: [OfferingsService, OfferingsRepository, DeployService, OfferingViewService, OfferingFeaturesService, OfferingFeaturesRepository],
+  providers: [OfferingsService, OfferingsRepository, DeployService, OfferingViewService, OfferingFeaturesService, OfferingFeaturesRepository, OfferingsSyncWorker],
   exports: [OfferingsService, OfferingsRepository, OfferingViewService],
 })
 export class OfferingsModule {}

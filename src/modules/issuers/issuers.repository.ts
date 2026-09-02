@@ -154,4 +154,13 @@ export class IssuersRepository {
     );
     return row;
   }
+
+  /** Tenant-free lookup — used only for display conveniences (e.g. issuer name
+   *  on the public offerings list). Never returns sensitive columns. */
+  async findAnyTenant(id: string): Promise<Issuer | undefined> {
+    const [row] = await this.db.worker('issuers: findAnyTenant', (tx) =>
+      tx.select().from(issuers).where(eq(issuers.id, id)).limit(1),
+    );
+    return row;
+  }
 }

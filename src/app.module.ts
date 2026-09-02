@@ -26,6 +26,8 @@ import { MailModule } from '@shared/mail/mail.module';
 import { StorageModule } from '@shared/storage/storage.module';
 import { PaymentsModule } from '@shared/payments/payments.module';
 import { AmlModule } from '@shared/aml/aml.module';
+import { RedisModule } from '@shared/redis/redis.module';
+import { QueueModule } from '@shared/queue/queue.module';
 import { AuthGuard } from '@shared/auth/auth.guard';
 import { TenantGuard } from '@shared/auth/tenant.guard';
 import { RolesGuard } from '@shared/auth/roles.guard';
@@ -88,6 +90,8 @@ import { UploadsModule } from '@modules/uploads/uploads.module';
     StorageModule,
     PaymentsModule,
     AmlModule,
+    RedisModule,
+    QueueModule,
 
     HealthModule,
     AuthModule,

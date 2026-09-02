@@ -23,8 +23,9 @@ export const PROPERTY_TYPES = [
  * separate, explicitly retryable step (POST /api/admin/offerings/:id/deploy-token).
  */
 export const CreateAssetSchema = z.object({
-  // token plan
-  symbol: z.string().trim().regex(/^[A-Z0-9]{2,12}$/, 'Uppercase alphanumeric, 2-12 chars'),
+  // token plan — all optional: an asset can be created without a token plan.
+  // Token config is set later from the Offerings detail page before deploying.
+  symbol: z.string().trim().regex(/^[A-Z0-9]{2,12}$/, 'Uppercase alphanumeric, 2-12 chars').nullish(),
   tokenName: z.string().trim().max(200).nullish(),
   /* Shown by the wizard, never stored — cross-checked against targetRaise /
      pricePerToken in the service so UI and enforcement cannot disagree. */
@@ -53,7 +54,7 @@ export const CreateAssetSchema = z.object({
     .max(30)
     .optional(),
   currency: z.string().trim().length(3).default('INR'),
-  pricePerToken: money,
+  pricePerToken: money.nullish(),
   minInvestment: money,
   maxInvestment: money.nullish(),
   accreditedMaxInvestment: money.nullish(),

@@ -26,8 +26,10 @@ import { ChainService } from '@shared/chain/chain.service';
 import type { Offering } from '@shared/db/schema';
 import { ManagersService } from '@modules/managers/managers.service';
 import { TokensRepository } from '@modules/tokens/tokens.repository';
+import { IssuersRepository } from '@modules/issuers/issuers.repository';
 import { OfferingsRepository } from './offerings.repository';
 import { OfferingFeaturesRepository } from './offering-features.repository';
+import { RedisService } from '@shared/redis/redis.service';
 
 const LOCKUP_ABI = ['function getLockupDuration(address compliance) view returns (uint256)'];
 
@@ -67,6 +69,7 @@ export interface EnrichedOffering {
   managerId: string | null;
   manager: { id: string; name: string; company: string | null; bio: string | null; logoUrl: string | null; contactEmail: string | null } | null;
   issuerId: string | null;
+  issuerName: string | null;
   ownerOccupied: boolean;
   sellerWallet: string | null;
   retainedPct: number | null;
@@ -85,21 +88,24 @@ export interface EnrichedOffering {
 @Injectable()
 export class OfferingViewService {
   private readonly logger = new Logger(OfferingViewService.name);
-  /* Both fixed at deploy time, so cache forever by token address. */
-  private readonly lockupCache = new Map<string, number>();
-  private readonly ownerCache = new Map<string, string>();
 
   constructor(
     private readonly repo: OfferingsRepository,
     private readonly features: OfferingFeaturesRepository,
     private readonly tokens: TokensRepository,
     private readonly managers: ManagersService,
+    private readonly issuerRepo: IssuersRepository,
     private readonly chain: ChainService,
     private readonly config: AppConfig,
+    private readonly redis: RedisService,
   ) {}
 
-  enrichAll(rows: Offering[]): Promise<EnrichedOffering[]> {
-    return Promise.all(rows.map((r) => this.enrich(r)));
+  async enrichAll(rows: Offering[]): Promise<EnrichedOffering[]> {
+    const enriched = [];
+    for (const row of rows) {
+      enriched.push(await this.enrich(row));
+    }
+    return enriched;
   }
 
   async enrich(o: Offering): Promise<EnrichedOffering> {
@@ -171,6 +177,7 @@ export class OfferingViewService {
       managerId: o.managerId,
       manager: null,
       issuerId: o.issuerId,
+      issuerName: null,
       ownerOccupied: o.ownerOccupied,
       sellerWallet: o.sellerWallet,
       retainedPct: num(o.retainedPct),
@@ -188,6 +195,13 @@ export class OfferingViewService {
 
     if (o.managerId) {
       base.manager = await this.managers.publicCard(o.managerId);
+    }
+
+    if (o.issuerId) {
+      try {
+        const issuer = await this.issuerRepo.findAnyTenant(o.issuerId);
+        if (issuer) base.issuerName = issuer.name;
+      } catch { /* non-critical — the name is a display convenience */ }
     }
 
     /* Surface an open seller-buyback so holders know they can sell back. */
@@ -229,30 +243,59 @@ export class OfferingViewService {
 
   /** Lock-in days from the on-chain lockup module; null when unreadable. */
   private async lockupDaysFor(tokenAddress: string): Promise<number | null> {
-    const cached = this.lockupCache.get(tokenAddress);
-    if (cached !== undefined) return cached;
+    try {
+      const cached = await this.redis.client.get(`token:lockup:${tokenAddress}`);
+      if (cached !== null) {
+        this.logger.debug(`CACHE HIT: lockupDaysFor ${tokenAddress}`);
+        return cached === '-1' ? null : Number(cached);
+      }
+    } catch (err) { 
+      this.logger.error(`CACHE ERROR: lockupDaysFor ${tokenAddress}`, err);
+    }
+    
+    this.logger.debug(`CACHE MISS: lockupDaysFor ${tokenAddress} - Fetching from RPC`);
     const moduleAddr = this.config.get('LOCKUP_MODULE');
     if (!moduleAddr) return null;
     try {
       const compliance = (await this.chain.token(tokenAddress).compliance()) as string;
       const lockup = new ethers.Contract(moduleAddr, LOCKUP_ABI, this.chain.provider);
       const days = Math.round(Number(await lockup.getLockupDuration(compliance)) / 86400);
-      this.lockupCache.set(tokenAddress, days);
+      try {
+        await this.redis.client.set(`token:lockup:${tokenAddress}`, days.toString(), 'EX', 300);
+      } catch { /* ignore */ }
       return days;
     } catch {
-      return null; // chain unreachable — don't cache, retry next request
+      // It failed, meaning no lockup module or another error. Cache it as -1 to prevent retries.
+      try {
+        await this.redis.client.set(`token:lockup:${tokenAddress}`, '-1', 'EX', 300);
+      } catch { /* ignore */ }
+      return null;
     }
   }
 
   private async ownerOf(tokenAddress: string): Promise<string | null> {
-    const cached = this.ownerCache.get(tokenAddress);
-    if (cached !== undefined) return cached;
+    try {
+      const cached = await this.redis.client.get(`token:owner:${tokenAddress}`);
+      if (cached !== null) {
+        this.logger.debug(`CACHE HIT: ownerOf ${tokenAddress}`);
+        return cached === '-1' ? null : cached;
+      }
+    } catch (err) {
+      this.logger.error(`CACHE ERROR: ownerOf ${tokenAddress}`, err);
+    }
+
+    this.logger.debug(`CACHE MISS: ownerOf ${tokenAddress} - Fetching from RPC`);
     try {
       const owner = (await this.chain.token(tokenAddress).owner()) as string;
-      this.ownerCache.set(tokenAddress, owner);
+      try {
+        await this.redis.client.set(`token:owner:${tokenAddress}`, owner, 'EX', 300);
+      } catch { /* ignore */ }
       return owner;
     } catch (err) {
       this.logger.warn({ err, tokenAddress }, 'offering view: owner read failed');
+      try {
+        await this.redis.client.set(`token:owner:${tokenAddress}`, '-1', 'EX', 300);
+      } catch { /* ignore */ }
       return null;
     }
   }

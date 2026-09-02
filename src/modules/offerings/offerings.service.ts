@@ -346,10 +346,8 @@ export class OfferingsService {
       );
     }
 
-    /* Supply is DERIVED from targetRaise / pricePerToken. A stated total that
-       disagrees means the operator was shown one number while the platform
-       would enforce another — reject rather than silently pick one. */
-    if (input.totalTokens != null) {
+    /* Supply cross-check only when both price and totalTokens are provided. */
+    if (input.totalTokens != null && input.pricePerToken != null) {
       const price = Number(input.pricePerToken);
       if (!(price > 0)) {
         throw AppError.unprocessable('PRICE_REQUIRED', 'Price per token must be greater than zero.');
@@ -374,11 +372,16 @@ export class OfferingsService {
       );
     }
 
-    const symbol = input.symbol.trim().toUpperCase();
-    const id = symbol.toLowerCase();
+    /* When a symbol is provided, use it as the slug ID (legacy path).
+       When no symbol, derive a slug from the asset name. */
+    const hasSymbol = !!input.symbol?.trim();
+    const symbol = hasSymbol ? input.symbol!.trim().toUpperCase() : null;
+    const id = symbol
+      ? symbol.toLowerCase()
+      : input.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48);
 
     /* Fail early if the symbol is already spoken for, not at deploy time. */
-    if (await this.repo.tokenSymbolInUse(symbol)) {
+    if (symbol && await this.repo.tokenSymbolInUse(symbol)) {
       throw AppError.conflict('TOKEN_SYMBOL_EXISTS', `A token "${symbol}" already exists.`, {
         symbol,
       });
@@ -387,18 +390,19 @@ export class OfferingsService {
       throw AppError.conflict('OFFERING_EXISTS', `An offering with id "${id}" already exists.`);
     }
 
-    /* Everything the deploy step will need, plus the status to apply once a
-       token exists — an offering cannot be `open` before it can be invested
-       in, so a wizard asking for "Live" records the intent here and
-       deployToken applies it. */
-    const tokenPlan = {
-      symbol,
-      tokenName: input.tokenName?.trim() || input.name,
-      maxHolders: input.maxHolders ?? 500,
-      lockupDays: input.lockupDays ?? 0,
-      requiresAccreditation: input.requiresAccreditation === true,
-      intendedStatus: input.status ?? 'open',
-    };
+    /* Token plan is only recorded when a symbol is provided. Without it, the
+       asset is a listing-only record; token config is set later from the
+       Offerings detail page before deploying. */
+    const tokenPlan = symbol
+      ? {
+          symbol,
+          tokenName: input.tokenName?.trim() || input.name,
+          maxHolders: input.maxHolders ?? 500,
+          lockupDays: input.lockupDays ?? 0,
+          requiresAccreditation: input.requiresAccreditation === true,
+          intendedStatus: input.status ?? 'open',
+        }
+      : null;
 
     const row = await this.repo.create(tenant, issuerId, {
       id,
@@ -408,7 +412,7 @@ export class OfferingsService {
       image: input.image ?? input.images?.[0] ?? null,
       description: input.description ?? null,
       currency: input.currency,
-      pricePerToken: input.pricePerToken,
+      pricePerToken: input.pricePerToken ?? '0',
       minInvestment: input.minInvestment,
       maxInvestment: input.maxInvestment ?? null,
       accreditedMaxInvestment: input.accreditedMaxInvestment ?? null,
@@ -432,13 +436,15 @@ export class OfferingsService {
     await this.audit.record(principal, tenant, {
       action: 'asset.create',
       target: issuerId,
-      params: { symbol, name: input.name, deployed: false },
+      params: { symbol: symbol ?? id, name: input.name, deployed: false },
     });
 
     return {
       token: null,
       offering: OfferingsService.view(row),
-      nextStep: 'Deploy the token from Offerings → Deploy token.',
+      nextStep: symbol
+        ? 'Deploy the token from Offerings → Deploy token.'
+        : 'Configure the token from Offerings → View details → Tokenomics, then deploy.',
     };
   }
 }

@@ -26,6 +26,7 @@ export const EnvSchema = z.object({
      connection: direct connections are IPv6-only on new projects and the free
      tier's connection budget is small. See CLAUDE.md §7.1. */
   DATABASE_URL: z.string().url(),
+  REDIS_URL: z.string().url().default('redis://localhost:6379'),
 
   /* Supabase terminates TLS and requires SSL. 'no-verify' skips CA validation
      (fine for the pooler, which presents a cert for a different hostname);

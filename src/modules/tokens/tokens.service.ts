@@ -5,6 +5,7 @@ import { DbService } from '@shared/db/db.service';
 import { sql } from 'drizzle-orm';
 import type { TenantContext } from '@shared/auth/tenant-context';
 import { TokensRepository } from './tokens.repository';
+import { RedisService } from '@shared/redis/redis.service';
 
 export interface TokenView {
   symbol: string;
@@ -24,6 +25,7 @@ export class TokensService {
     private readonly repo: TokensRepository,
     private readonly chain: ChainService,
     private readonly db: DbService,
+    private readonly redis: RedisService,
   ) {}
 
   /**
@@ -38,6 +40,21 @@ export class TokensService {
     const items = await Promise.all(
       rows.map(async (r): Promise<TokenView> => {
         const base = { symbol: r.symbol, address: r.address, issuerId: r.issuerId };
+        try {
+          const cached = await this.redis.client.get(`token:meta:${r.address}`);
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            return {
+              ...base,
+              name: parsed.name,
+              decimals: parsed.decimals,
+              totalSupply: ethers.formatUnits(parsed.totalSupply, parsed.decimals),
+              paused: parsed.paused,
+              onChain: true,
+            };
+          }
+        } catch { /* ignore */ }
+
         try {
           const c = this.chain.token(r.address);
           const [name, decimals, totalSupply, paused] = await Promise.all([
@@ -64,6 +81,23 @@ export class TokensService {
 
   async get(tenant: TenantContext, symbol: string): Promise<TokenView> {
     const r = await this.repo.require(tenant, symbol);
+    try {
+      const cached = await this.redis.client.get(`token:meta:${r.address}`);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        return {
+          symbol: r.symbol,
+          address: r.address,
+          issuerId: r.issuerId,
+          name: parsed.name,
+          decimals: parsed.decimals,
+          totalSupply: ethers.formatUnits(parsed.totalSupply, parsed.decimals),
+          paused: parsed.paused,
+          onChain: true,
+        };
+      }
+    } catch { /* ignore */ }
+
     const c = this.chain.token(r.address);
     const [name, decimals, totalSupply, paused] = await Promise.all([
       c.name() as Promise<string>,

@@ -271,4 +271,16 @@ export class OfferingsRepository {
     );
     return rows.length > 0;
   }
+
+  /** Worker read: resolve a symbol to an address globally. */
+  async findTokenAddressBySymbol(symbol: string): Promise<string | undefined> {
+    const rows = await this.db.worker('offerings: resolve token address', (tx) =>
+      tx
+        .select({ address: tokens.address })
+        .from(tokens)
+        .where(sql`upper(${tokens.symbol}) = upper(${symbol})`)
+        .limit(1),
+    );
+    return rows[0]?.address;
+  }
 }

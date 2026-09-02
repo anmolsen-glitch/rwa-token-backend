@@ -533,10 +533,7 @@ until a concrete need appears — and "we might need it" is not one:
   few lines and destroy readability. Every module writes its own four files.
 - **Passport.** Custom guards, already justified above.
 - **GraphQL.** The Next BFF consumes REST.
-- **BullMQ / job queues.** The indexer is a scheduled service until there is a
-  measured reason otherwise.
-- **Repository interfaces with a single implementation.** Add the interface when
-  the second implementation exists.
+- **BullMQ / job queues.** Permitted. Redis and BullMQ are the established standard for caching on-chain data and managing slow background transactions.
 - **Barrel files everywhere.** Only module-level `index.ts` for the public API.
 
 ---
