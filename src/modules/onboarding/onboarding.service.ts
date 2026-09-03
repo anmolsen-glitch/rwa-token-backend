@@ -24,7 +24,7 @@ import { Injectable } from '@nestjs/common';
 import { ethers } from 'ethers';
 import { AppError } from '@shared/errors/app-error';
 import { AuditService } from '@shared/audit/audit.service';
-import { ChainService, TRUSTED_ISSUERS_REGISTRY_ABI } from '@shared/chain/chain.service';
+import { ChainService } from '@shared/chain/chain.service';
 import { ClaimIssuerService, type SignedClaim } from '@shared/chain/claim-issuer.service';
 import {
   ACCREDITED_TOPIC,
