@@ -1,0 +1,26 @@
+{
+  "localhost": {
+    "deployer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+    "agent": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    "claimIssuerSigner": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+    "idFactory": "0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6",
+    "claimIssuer": "0x663F3ad617193148711d28f5334eE4Ed07016602",
+    "trexFactory": "0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e",
+    "trexImplementationAuthority": "0x8A791620dd6260079BF849Dc5567aDC3F2FdC318",
+    "identityImplementationAuthority": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+    "maxHoldersModule": "0x0DCd1Bf9A1b36cE34237eEaFef220932846BCD82",
+    "lockupPeriodModule": "0x9A676e781A523b5d0C0e43731313A708CB607508"
+  },
+  "sepolia": {
+    "deployer": "0xd835E943926FD356CC8f1E1EbcE7b0D60AA11AD9",
+    "agent": "0xb475756115CB5C32B1977ccaE683b93A88AF7a7E",
+    "claimIssuerSigner": "0xFE960Daf59806Ee9AF0746046938ece7000f660d",
+    "idFactory": "0xEb2e82C36235932eA64455d2Ce320aEe10d3505B",
+    "claimIssuer": "0x7048566a53Ccf7e6008204bB6947f34BA2Eca6C1",
+    "trexFactory": "0x6fE0206f1024469B823d571FeCDaFBf988e6F9eD",
+    "trexImplementationAuthority": "0xC1352ee5840bfADD8b79FEdFCB05Ef7fd534E982",
+    "identityImplementationAuthority": "0x6A502bBF63880C2f84C09879F3E981a1a45d2E5B",
+    "maxHoldersModule": "0xEfE8c928Bc74D92885e45e90BbB9317d1Dd3F4e0",
+    "lockupPeriodModule": "0xdb1a243B49bbaE516B0a23C1441fA56a4D11Fd38"
+  }
+}

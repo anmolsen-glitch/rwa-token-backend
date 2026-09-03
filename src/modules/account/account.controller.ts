@@ -18,9 +18,10 @@ import { CurrentUser, Public, Session } from '@shared/auth/decorators';
 import { JwtService } from '@shared/auth/jwt.service';
 import { SessionService } from '@shared/auth/session.service';
 import type { Principal } from '@shared/auth/tenant-context';
+import { AppError } from '@shared/errors/app-error';
 import { ApiAuthErrors, ApiConflict, ApiValidationError } from '@shared/openapi/api-error.decorator';
 import { SiweService } from '@modules/wallet/siwe.service';
-import { AccountService } from './account.service';
+import { AccountService, type AccountView } from './account.service';
 import {
   AccountLoginDto,
   ForgotPasswordDto,
@@ -43,6 +44,12 @@ export class AccountController {
     private readonly siwe: SiweService,
     private readonly jwt: JwtService,
   ) {}
+
+  /** Investor API routes need a wallet JWT; issue one when a wallet is already linked. */
+  private issueInvestorIfLinked(reply: FastifyReply, account: AccountView): void {
+    const wallet = account.wallets[0];
+    if (wallet) this.session.issueInvestor(reply, this.jwt.signInvestor(wallet));
+  }
 
   @Public()
   @ApiOperation({
@@ -76,6 +83,7 @@ export class AccountController {
   async verifyEmail(@Body() dto: VerifyEmailDto, @Res({ passthrough: true }) reply: FastifyReply) {
     const { token, account } = await this.accounts.verifyEmail(dto.email, dto.code);
     this.session.issueAccount(reply, token);
+    this.issueInvestorIfLinked(reply, account);
     return { account };
   }
 
@@ -107,6 +115,7 @@ export class AccountController {
   async login(@Body() dto: AccountLoginDto, @Res({ passthrough: true }) reply: FastifyReply) {
     const { token, account } = await this.accounts.login(dto.email, dto.password);
     this.session.issueAccount(reply, token);
+    this.issueInvestorIfLinked(reply, account);
     return { account };
   }
 
@@ -149,6 +158,7 @@ export class AccountController {
       dto.newPassword,
     );
     this.session.issueAccount(reply, token);
+    this.issueInvestorIfLinked(reply, account);
     return { account };
   }
 
@@ -158,6 +168,7 @@ export class AccountController {
   @Post('logout')
   logout(@Res({ passthrough: true }) reply: FastifyReply) {
     this.session.clearAccount(reply);
+    this.session.clearInvestor(reply);
     return { ok: true };
   }
 
@@ -201,6 +212,27 @@ export class AccountController {
   @Post('wallet/nonce')
   nonce(@Body() dto: NonceDto) {
     return this.siwe.requestNonce(dto.address);
+  }
+
+  @ApiOperation({
+    summary: 'Refresh the wallet (investor) session',
+    description:
+      'Re-issues the investor JWT for an already-linked wallet using the account session. ' +
+      'Avoids asking for a new SIWE signature on every visit — on-chain actions still ' +
+      'require the wallet to sign.',
+  })
+  @ApiAuthErrors()
+  @HttpCode(200)
+  @Post('wallet/refresh-session')
+  async refreshWalletSession(
+    @CurrentUser() principal: Principal,
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ) {
+    const profile = await this.accounts.me(principal.id);
+    const wallet = profile.address ?? profile.primaryWallet ?? profile.wallets[0];
+    if (!wallet) throw AppError.forbidden('Connect a wallet first.');
+    this.session.issueInvestor(reply, this.jwt.signInvestor(wallet));
+    return { ok: true, address: wallet };
   }
 
   @ApiOperation({

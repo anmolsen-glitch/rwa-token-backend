@@ -117,21 +117,41 @@ export class AccountRepository {
   }
 
   /** Move the person into the review queue. */
-  async submitKyc(accountId: string, country: number | null, name: string | null): Promise<void> {
-    await this.db.worker('account: submit kyc', (tx) =>
-      tx
+  async submitKyc(
+    accountId: string,
+    country: number | null,
+    name: string | null,
+    kycDetails: Record<string, unknown>,
+  ): Promise<void> {
+    await this.db.worker('account: submit kyc', async (tx) => {
+      await tx
         .update(accounts)
         .set({
           kycStatus: 'applied',
           kycSubmittedAt: new Date(),
           kycNote: null,
           kycRejectedAt: null,
+          kycDetails,
           ...(country !== null ? { country } : {}),
           ...(name !== null ? { name } : {}),
           updatedAt: new Date(),
         })
-        .where(eq(accounts.id, accountId)),
-    );
+        .where(eq(accounts.id, accountId));
+
+      /* TEMPORARY Express mirror — keep wallet rows in sync for issuer detail UI. */
+      await tx
+        .update(investors)
+        .set({
+          kycStatus: 'applied',
+          kycSubmittedAt: new Date(),
+          kycNote: null,
+          kycRejectedAt: null,
+          kycDetails,
+          ...(country !== null ? { country } : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(investors.accountId, accountId));
+    });
   }
 
   /**
@@ -150,11 +170,14 @@ export class AccountRepository {
         .limit(1);
 
       if (existing.length === 0) {
+        const [acct] = await tx.select().from(accounts).where(eq(accounts.id, accountId)).limit(1);
         await tx.insert(investors).values({
           wallet: wallet.toLowerCase(),
           accountId,
-          kycStatus: 'none',
-          kycVersion: '1',
+          kycStatus: acct?.kycStatus ?? 'none',
+          kycVersion: acct?.kycVersion ?? '1',
+          kycDetails: acct?.kycDetails ?? {},
+          country: acct?.country ?? null,
           verified: false,
         });
         return;
@@ -166,9 +189,20 @@ export class AccountRepository {
            would move someone else's holdings under this person. */
         throw new Error('WALLET_OWNED_BY_ANOTHER_ACCOUNT');
       }
+      const [acct] = await tx.select().from(accounts).where(eq(accounts.id, accountId)).limit(1);
       await tx
         .update(investors)
-        .set({ accountId, updatedAt: new Date() })
+        .set({
+          accountId,
+          kycStatus: acct?.kycStatus ?? existing[0].kycStatus,
+          kycVersion: acct?.kycVersion ?? existing[0].kycVersion,
+          kycDetails: acct?.kycDetails ?? existing[0].kycDetails,
+          country: acct?.country ?? existing[0].country,
+          amlStatus: acct?.amlStatus ?? existing[0].amlStatus,
+          accreditationStatus: acct?.accreditationStatus ?? existing[0].accreditationStatus,
+          accreditationNote: acct?.accreditationNote ?? existing[0].accreditationNote,
+          updatedAt: new Date(),
+        })
         .where(sql`lower(${investors.wallet}) = lower(${wallet})`);
     });
   }

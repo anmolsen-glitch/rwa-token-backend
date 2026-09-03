@@ -10,7 +10,7 @@
  * One person may link several wallets; they do not thereby acquire several
  * identities, several KYC states, or several countries.
  */
-import { boolean, integer, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { boolean, integer, jsonb, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { bigintId } from './columns';
 
@@ -30,6 +30,7 @@ export const accounts = pgTable('accounts', {
   kycRejectedAt: timestamp('kyc_rejected_at', { withTimezone: true }),
   kycVersion: bigintId('kyc_version').notNull().default('1'),
   country: integer('country'),
+  kycDetails: jsonb('kyc_details').notNull().default({}),
 
   /* Aggregate across every wallet the person controls — the WORST decision
      (migration 047). Individual screenings stay per-wallet in aml_screenings. */

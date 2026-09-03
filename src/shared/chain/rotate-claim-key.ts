@@ -44,8 +44,7 @@ const keyOf = (address: string): string =>
 
 function claimIssuerAddress(network: string): string {
   const file =
-    process.env.ADDRESSES_FILE ??
-    resolve(process.cwd(), '../rwa-token-production/config/deployed-addresses.json');
+    process.env.ADDRESSES_FILE ?? resolve(process.cwd(), 'config/deployed-addresses.json');
   if (!existsSync(file)) throw new Error(`Address book not found: ${file}`);
   const all = JSON.parse(readFileSync(file, 'utf8')) as Record<string, { claimIssuer?: string }>;
   const addr = all[network]?.claimIssuer;

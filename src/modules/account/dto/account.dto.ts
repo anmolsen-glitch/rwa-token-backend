@@ -7,10 +7,29 @@ export const AccountLoginSchema = z.object({
 });
 export class AccountLoginDto extends createZodDto(AccountLoginSchema) {}
 
+const amlSchema = z.object({
+  isPep: z.boolean(),
+  pepDetails: z.string().trim().max(2000).nullable().optional(),
+  sourceOfFunds: z.string().trim().min(1).max(100),
+  occupation: z.string().trim().max(200).nullable().optional(),
+  taxResidency: z.coerce.number().int().min(1).max(999).nullable().optional(),
+  sanctionsDeclaration: z.literal(true),
+  fundsLegitimateDeclaration: z.literal(true),
+});
+
 export const SubmitKycSchema = z.object({
   /* ISO-3166 numeric, matching offerings.country and investors.country. */
   country: z.coerce.number().int().min(1).max(999).optional(),
   name: z.string().trim().min(1).max(200).optional(),
+  docType: z.enum(['passport', 'drivers_license', 'national_id', 'pan', 'other']),
+  addressDocType: z.enum([
+    'utility_bill',
+    'bank_statement',
+    'rental_agreement',
+    'govt_letter',
+    'other',
+  ]),
+  aml: amlSchema,
 });
 export class SubmitKycDto extends createZodDto(SubmitKycSchema) {}
 

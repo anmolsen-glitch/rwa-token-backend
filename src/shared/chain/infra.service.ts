@@ -1,9 +1,8 @@
 /**
  * The deployed-contract address book.
  *
- * Ported from ../rwa-token-backend/src/lib/config.ts. The file is written by
- * the contracts project's deploy scripts and is the bootstrap source for
- * platform infrastructure (IdFactory, ClaimIssuer, TREXFactory).
+ * Copied into this service so the API does not need the contracts repo at
+ * runtime. After a new deploy, replace `config/deployed-addresses.json`.
  *
  * NOTE the split of responsibilities since migration 039: the `tokens` TABLE is
  * authoritative for token -> issuer, while this file remains authoritative for
@@ -12,6 +11,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { AppError } from '../errors/app-error';
 import { AppConfig } from '../config/app-config.service';
 
 export interface Infra {
@@ -34,9 +34,9 @@ export class InfraService {
   private readonly file: string;
 
   constructor(private readonly config: AppConfig) {
-    this.file =
-      config.get('ADDRESSES_FILE') ??
-      resolve(process.cwd(), '../rwa-token-production/config/deployed-addresses.json');
+    this.file = resolve(
+      config.get('ADDRESSES_FILE') ?? resolve(process.cwd(), 'config/deployed-addresses.json'),
+    );
   }
 
   private section(): NetworkSection | null {
@@ -69,8 +69,11 @@ export class InfraService {
   require(): Infra {
     const infra = this.get();
     if (!infra) {
-      throw new Error(
+      throw new AppError(
+        'INFRA_NOT_DEPLOYED',
+        503,
         `Platform infrastructure is not deployed on network "${this.config.get('NETWORK')}".`,
+        { network: this.config.get('NETWORK') },
       );
     }
     return infra;

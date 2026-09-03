@@ -24,7 +24,7 @@ import { Injectable } from '@nestjs/common';
 import { ethers } from 'ethers';
 import { AppError } from '@shared/errors/app-error';
 import { AuditService } from '@shared/audit/audit.service';
-import { ChainService } from '@shared/chain/chain.service';
+import { ChainService, TRUSTED_ISSUERS_REGISTRY_ABI } from '@shared/chain/chain.service';
 import { ClaimIssuerService, type SignedClaim } from '@shared/chain/claim-issuer.service';
 import {
   ACCREDITED_TOPIC,
@@ -152,10 +152,20 @@ export class OnboardingService {
     /* KYC and the ONCHAINID belong to the PERSON (primary wallet), not to
        whichever linked wallet is being onboarded. */
     const primary = await this.repo.resolvePrimaryWallet(address);
-    const person = await this.repo.getInvestor(primary);
+    let { investor: person, kycStatus } = await this.repo.resolveCompliance(primary);
 
-    if (!person || person.kycStatus !== 'completed') {
-      throw new AppError('KYC_NOT_APPROVED', 403, 'KYC is not approved for this account yet.');
+    /* Belt-and-suspenders: the investor JWT carries account_id from link-wallet. */
+    if (kycStatus !== 'completed' && principal.accountId) {
+      const acct = await this.repo.accountCompliance(principal.accountId);
+      if (acct) kycStatus = acct.kycStatus;
+    }
+
+    if (!person || kycStatus !== 'completed') {
+      throw new AppError('KYC_NOT_APPROVED', 403, 'KYC is not approved for this account yet.', {
+        kycStatus,
+        wallet: primary,
+        accountId: principal.accountId ?? person?.accountId ?? null,
+      });
     }
 
     const topics = await this.requiredTopics(tokenSymbol);
@@ -234,9 +244,13 @@ export class OnboardingService {
     if (identity === ethers.ZeroAddress) {
       const factory = this.identities.idFactory(idFactoryAddress, this.signers.get('deployer'));
       const salt = `person-${primaryWallet.slice(2, 12)}-${KYC_TOPIC}`;
-      await this.tx.submit(`createIdentity ${wallet}`, () =>
-        factory.createIdentity(wallet, salt) as Promise<ethers.ContractTransactionResponse>,
-      );
+      try {
+        await this.tx.submit(`createIdentity ${wallet}`, () =>
+          factory.createIdentity(wallet, salt) as Promise<ethers.ContractTransactionResponse>,
+        );
+      } catch (err) {
+        throw chainFailure(err, 'Could not create your on-chain identity.');
+      }
       identity = await factoryRead.getIdentity(wallet);
     }
 
@@ -265,7 +279,7 @@ export class OnboardingService {
     const address = ethers.getAddress(wallet);
     const primary = await this.repo.resolvePrimaryWallet(address);
 
-    const person = await this.repo.getInvestor(primary);
+    const { investor: person, country } = await this.repo.resolveCompliance(primary);
     const identity = person?.onchainid;
     if (!identity || !(await this.identities.hasCode(identity))) {
       throw new AppError('NO_IDENTITY', 409, 'No ONCHAINID exists yet — call prepare first.');
@@ -294,26 +308,78 @@ export class OnboardingService {
 
     let registered = (await registryRead.contains(address)) as boolean;
     if (!registered) {
-      await this.tx.submit(`registerIdentity ${address} -> ${tokenSymbol}`, () =>
-        registry.registerIdentity(
-          address,
-          identity,
-          person.country ?? 0,
-        ) as Promise<ethers.ContractTransactionResponse>,
-      );
+      try {
+        await this.tx.submit(`registerIdentity ${address} -> ${tokenSymbol}`, () =>
+          registry.registerIdentity(
+            address,
+            identity,
+            country ?? person?.country ?? 0,
+          ) as Promise<ethers.ContractTransactionResponse>,
+        );
+      } catch (err) {
+        throw chainFailure(err, `Could not register your identity for ${tokenSymbol}.`);
+      }
       registered = true;
     }
 
     const verified = (await registryRead.isVerified(address)) as boolean;
-    await this.repo.setVerified(primary, verified);
+    if (!verified) {
+      await this.ensurePlatformIssuerTrusted(registryAddress, tokenSymbol);
+    }
+    const verifiedAfter = (await registryRead.isVerified(address)) as boolean;
+    await this.repo.setVerified(primary, verifiedAfter);
 
     await this.audit.record(principal, tenant, {
       action: 'onboarding.identity_registered',
       target: address,
-      params: { token: tokenSymbol, identity, verified },
+      params: { token: tokenSymbol, identity, verified: verifiedAfter },
     });
 
-    return { wallet: address, identity, registered, verified };
+    if (!verifiedAfter) {
+      throw new AppError(
+        'NOT_VERIFIED_ON_CHAIN',
+        502,
+        `Your identity is registered for ${tokenSymbol} but the token does not treat you as verified. The claim issuer on this asset may not match the platform issuer.`,
+        { token: tokenSymbol, identity },
+      );
+    }
+
+    return { wallet: address, identity, registered, verified: verifiedAfter };
+  }
+
+  /**
+   * Tokens deployed before the current ClaimIssuer address was set still trust
+   * the old issuer. isVerified then stays false even with a live KYC claim.
+   * If we own the TrustedIssuersRegistry, add the platform issuer.
+   */
+  private async ensurePlatformIssuerTrusted(registryAddress: string, tokenSymbol: string): Promise<void> {
+    const infra = this.infra.require();
+    const registryRead = this.chain.identityRegistry(registryAddress);
+    const tirAddr: string = await registryRead.issuersRegistry();
+    const tirRead = this.chain.trustedIssuersRegistry(tirAddr);
+    const already = (await tirRead.isTrustedIssuer(infra.claimIssuer)) as boolean;
+    if (already) return;
+
+    const owner = ((await tirRead.owner()) as string).toLowerCase();
+    const deployer = (await this.signers.addressFor('deployer')).toLowerCase();
+    if (owner !== deployer) {
+      throw new AppError(
+        'CLAIM_ISSUER_NOT_TRUSTED',
+        502,
+        `${tokenSymbol} does not trust the platform claim issuer, so KYC claims cannot verify. A token owner must add the issuer to the trusted list.`,
+        { token: tokenSymbol, claimIssuer: infra.claimIssuer },
+      );
+    }
+
+    const topics = await this.requiredTopics(tokenSymbol);
+    const tir = this.chain.trustedIssuersRegistry(tirAddr, this.signers.get('deployer'));
+    try {
+      await this.tx.submit(`addTrustedIssuer ${infra.claimIssuer} -> ${tokenSymbol}`, () =>
+        tir.addTrustedIssuer(infra.claimIssuer, topics) as Promise<ethers.ContractTransactionResponse>,
+      );
+    } catch (err) {
+      throw chainFailure(err, `Could not trust the platform claim issuer on ${tokenSymbol}.`);
+    }
   }
 
   /** Where an investor stands, without sending anything. */
@@ -321,7 +387,7 @@ export class OnboardingService {
     const infra = this.infra.require();
     const address = ethers.getAddress(wallet);
     const primary = await this.repo.resolvePrimaryWallet(address);
-    const person = await this.repo.getInvestor(primary);
+    const { investor: person, kycStatus } = await this.repo.resolveCompliance(primary);
 
     const identity = person?.onchainid ?? null;
     const deployed = identity ? await this.identities.hasCode(identity) : false;
@@ -348,10 +414,34 @@ export class OnboardingService {
       wallet: address,
       identity,
       identityDeployed: deployed,
-      kycStatus: person?.kycStatus ?? 'none',
+      kycStatus,
       claims,
       registeredInRegistry: registered,
       verified,
     };
   }
+}
+
+function chainFailure(err: unknown, fallback: string): AppError {
+  if (err instanceof AppError) return err;
+  const raw =
+    (err as { shortMessage?: string; reason?: string; message?: string })?.shortMessage ??
+    (err as { reason?: string })?.reason ??
+    (err instanceof Error ? err.message : fallback);
+  const text = String(raw);
+  if (/not the owner/i.test(text)) {
+    return new AppError(
+      'CHAIN_SIGNER_MISMATCH',
+      502,
+      'The platform cannot create your on-chain identity: DEPLOYER_PRIVATE_KEY does not own the identity factory. Restart the API after pointing it at the Sepolia deployer key.',
+    );
+  }
+  if (/insufficient funds/i.test(text)) {
+    return new AppError(
+      'CHAIN_INSUFFICIENT_FUNDS',
+      502,
+      'The platform wallet does not have enough Sepolia ETH to deploy your identity. Fund the deployer and try again.',
+    );
+  }
+  return new AppError('CHAIN_TX_FAILED', 502, fallback, { reason: text.slice(0, 200) });
 }

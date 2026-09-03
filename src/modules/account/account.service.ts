@@ -313,7 +313,21 @@ export class AccountService {
    */
   async submitKyc(
     accountId: string,
-    input: { country?: number; name?: string },
+    input: {
+      country?: number;
+      name?: string;
+      docType: string;
+      addressDocType: string;
+      aml: {
+        isPep: boolean;
+        pepDetails?: string | null;
+        sourceOfFunds: string;
+        occupation?: string | null;
+        taxResidency?: number | null;
+        sanctionsDeclaration: true;
+        fundsLegitimateDeclaration: true;
+      };
+    },
   ): Promise<AccountView> {
     const account = await this.repo.byId(accountId);
     if (!account) throw AppError.unauthorized('Account no longer exists.');
@@ -325,7 +339,18 @@ export class AccountService {
       throw AppError.conflict('KYC_UNDER_REVIEW', 'Your KYC is already under review.');
     }
 
-    await this.repo.submitKyc(accountId, input.country ?? null, input.name ?? null);
+    const kycDetails = {
+      docType: input.docType,
+      addressDocType: input.addressDocType,
+      aml: input.aml,
+    };
+
+    await this.repo.submitKyc(
+      accountId,
+      input.country ?? null,
+      input.name ?? account.name ?? null,
+      kycDetails,
+    );
     return this.me(accountId);
   }
 

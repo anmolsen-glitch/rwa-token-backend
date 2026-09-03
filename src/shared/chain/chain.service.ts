@@ -43,6 +43,15 @@ export const IDENTITY_REGISTRY_ABI = [
   'function contains(address userAddress) view returns (bool)',
   'function registerIdentity(address userAddress, address identity, uint16 country)',
   'function deleteIdentity(address userAddress)',
+  'function issuersRegistry() view returns (address)',
+  'function topicsRegistry() view returns (address)',
+] as const;
+
+export const TRUSTED_ISSUERS_REGISTRY_ABI = [
+  'function owner() view returns (address)',
+  'function isTrustedIssuer(address issuer) view returns (bool)',
+  'function getTrustedIssuersForClaimTopic(uint256 claimTopic) view returns (address[])',
+  'function addTrustedIssuer(address trustedIssuer, uint256[] claimTopics)',
 ] as const;
 
 @Injectable()
@@ -95,6 +104,14 @@ export class ChainService {
     return new ethers.Contract(
       address,
       IDENTITY_REGISTRY_ABI as unknown as string[],
+      runner ?? this.provider,
+    );
+  }
+
+  trustedIssuersRegistry(address: string, runner?: ethers.ContractRunner): ethers.Contract {
+    return new ethers.Contract(
+      address,
+      TRUSTED_ISSUERS_REGISTRY_ABI as unknown as string[],
       runner ?? this.provider,
     );
   }

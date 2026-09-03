@@ -13,7 +13,7 @@
 import { Injectable } from '@nestjs/common';
 import { and, eq, sql } from 'drizzle-orm';
 import { DbService } from '@shared/db/db.service';
-import { investors, offerings, tokens, wallets, type Investor, type Token } from '@shared/db/schema';
+import { accounts, investors, offerings, tokens, wallets, type Investor, type Token } from '@shared/db/schema';
 import { AppError } from '@shared/errors/app-error';
 import { AppConfig } from '@shared/config/app-config.service';
 
@@ -89,6 +89,64 @@ export class OnboardingRepository {
     return row;
   }
 
+  /**
+   * KYC and accreditation are properties of the PERSON (accounts), not the wallet
+   * row. When account_id is set, accounts.* is authoritative — investors.* is
+   * only a legacy mirror and may be stale after link-wallet.
+   */
+  async resolveCompliance(primaryWallet: string): Promise<{
+    investor: Investor | undefined;
+    kycStatus: string;
+    accreditationStatus: string;
+    country: number | null;
+  }> {
+    const investor = await this.getInvestor(primaryWallet);
+    if (!investor) {
+      return { investor: undefined, kycStatus: 'none', accreditationStatus: 'none', country: null };
+    }
+    if (!investor.accountId) {
+      return {
+        investor,
+        kycStatus: investor.kycStatus,
+        accreditationStatus: investor.accreditationStatus ?? 'none',
+        country: investor.country,
+      };
+    }
+    const [account] = await this.db.worker('onboarding: load person compliance', (tx) =>
+      tx.select().from(accounts).where(eq(accounts.id, investor.accountId!)).limit(1),
+    );
+    if (!account) {
+      return {
+        investor,
+        kycStatus: investor.kycStatus,
+        accreditationStatus: investor.accreditationStatus ?? 'none',
+        country: investor.country,
+      };
+    }
+    return {
+      investor,
+      kycStatus: account.kycStatus,
+      accreditationStatus: account.accreditationStatus,
+      country: account.country ?? investor.country,
+    };
+  }
+
+  async accountCompliance(accountId: string): Promise<{
+    kycStatus: string;
+    accreditationStatus: string;
+    country: number | null;
+  } | null> {
+    const [account] = await this.db.worker('onboarding: load account compliance', (tx) =>
+      tx.select().from(accounts).where(eq(accounts.id, accountId)).limit(1),
+    );
+    if (!account) return null;
+    return {
+      kycStatus: account.kycStatus,
+      accreditationStatus: account.accreditationStatus,
+      country: account.country,
+    };
+  }
+
   async setOnchainId(primaryWallet: string, onchainid: string): Promise<void> {
     await this.db.worker('onboarding: record onchainid', (tx) =>
       tx
@@ -108,14 +166,8 @@ export class OnboardingRepository {
   }
 
   async isAccredited(primaryWallet: string): Promise<boolean> {
-    const [row] = await this.db.worker('onboarding: accreditation check', (tx) =>
-      tx
-        .select({ status: sql<string>`accreditation_status` })
-        .from(investors)
-        .where(sql`lower(${investors.wallet}) = lower(${primaryWallet})`)
-        .limit(1),
-    );
-    return row?.status === 'accredited';
+    const { accreditationStatus } = await this.resolveCompliance(primaryWallet);
+    return accreditationStatus === 'accredited';
   }
 
   /**

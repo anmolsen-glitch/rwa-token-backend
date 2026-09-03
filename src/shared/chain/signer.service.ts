@@ -51,6 +51,18 @@ export class SignerService implements OnModuleInit {
   onModuleInit(): void {
     this.assertProductionSafety();
     this.logger.log(`signer mode: ${this.mode()}`);
+    void this.warnIfDeployerMismatch();
+  }
+
+  /** IdFactory.createIdentity is onlyOwner — a swapped agent key fails every onboard. */
+  private async warnIfDeployerMismatch(): Promise<void> {
+    const expected = this.config.get('NETWORK');
+    try {
+      const address = await this.addressFor('deployer');
+      this.logger.log(`deployer signer ${address} on ${expected}`);
+    } catch (err) {
+      this.logger.warn({ err }, 'could not resolve deployer signer address');
+    }
   }
 
   private get signerType(): string {
@@ -140,6 +152,6 @@ export class SignerService implements OnModuleInit {
 
   /** Human-readable note for /health and logs. Never leaks a key id. */
   mode(): string {
-    return this.signerType === 'kms' ? 'kms' : 'local (DEV keys)';
+    return this.signerType === 'kms' ? 'kms' : this.explicitKeyFor('deployer') ? 'local' : 'local (DEV keys)';
   }
 }

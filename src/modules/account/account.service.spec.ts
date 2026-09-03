@@ -108,25 +108,76 @@ describe('me()', () => {
 describe('submitKyc', () => {
   it('works with NO wallet connected — KYC belongs to the person', async () => {
     const { service, repo } = make(account({ kycStatus: 'none' }), []);
-    await service.submitKyc('7', { country: 356, name: 'Person' });
-    expect(repo.submitKyc).toHaveBeenCalledWith('7', 356, 'Person');
+    await service.submitKyc('7', {
+      country: 356,
+      name: 'Person',
+      docType: 'passport',
+      addressDocType: 'utility_bill',
+      aml: {
+        isPep: false,
+        sourceOfFunds: 'salary',
+        sanctionsDeclaration: true,
+        fundsLegitimateDeclaration: true,
+      },
+    });
+    expect(repo.submitKyc).toHaveBeenCalledWith('7', 356, 'Person', {
+      docType: 'passport',
+      addressDocType: 'utility_bill',
+      aml: {
+        isPep: false,
+        sourceOfFunds: 'salary',
+        sanctionsDeclaration: true,
+        fundsLegitimateDeclaration: true,
+      },
+    });
   });
 
   it('refuses when already under review', async () => {
     const { service } = make(account({ kycStatus: 'applied' }));
-    await expect(service.submitKyc('7', {})).rejects.toMatchObject({ code: 'KYC_UNDER_REVIEW' });
+    await expect(
+      service.submitKyc('7', {
+        docType: 'passport',
+        addressDocType: 'utility_bill',
+        aml: {
+          isPep: false,
+          sourceOfFunds: 'salary',
+          sanctionsDeclaration: true,
+          fundsLegitimateDeclaration: true,
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'KYC_UNDER_REVIEW' });
   });
 
   it('refuses when already approved', async () => {
     const { service } = make(account({ kycStatus: 'completed' }));
-    await expect(service.submitKyc('7', {})).rejects.toMatchObject({
+    await expect(
+      service.submitKyc('7', {
+        docType: 'passport',
+        addressDocType: 'utility_bill',
+        aml: {
+          isPep: false,
+          sourceOfFunds: 'salary',
+          sanctionsDeclaration: true,
+          fundsLegitimateDeclaration: true,
+        },
+      }),
+    ).rejects.toMatchObject({
       code: 'KYC_ALREADY_APPROVED',
     });
   });
 
   it('allows re-submission after rejection', async () => {
     const { service, repo } = make(account({ kycStatus: 'rejected' }));
-    await service.submitKyc('7', {});
+    await service.submitKyc('7', {
+      docType: 'passport',
+      addressDocType: 'utility_bill',
+      aml: {
+        isPep: false,
+        sourceOfFunds: 'salary',
+        sanctionsDeclaration: true,
+        fundsLegitimateDeclaration: true,
+      },
+    });
     expect(repo.submitKyc).toHaveBeenCalled();
   });
 });

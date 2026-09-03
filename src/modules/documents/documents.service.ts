@@ -30,6 +30,8 @@ export const DOC_TYPES = [
   'pan',
   'address:utility_bill',
   'address:bank_statement',
+  'address:rental_agreement',
+  'address:govt_letter',
   'other',
 ] as const;
 export type DocType = (typeof DOC_TYPES)[number];

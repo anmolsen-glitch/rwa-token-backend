@@ -111,6 +111,7 @@ async function bootstrap(): Promise<void> {
    * which happens inside listen().
    */
   const uploadBodyLimit = Math.ceil((config.get('UPLOAD_MAX_BYTES') * 4) / 3) + 64 * 1024;
+  const kycBodyLimit = 2 * Math.ceil((config.get('DOCUMENT_MAX_BYTES') * 4) / 3) + 128 * 1024;
   app.getHttpAdapter().getInstance().addHook('onRoute', (route) => {
     const methods = Array.isArray(route.method) ? route.method : [route.method];
     if (route.url === '/api/uploads' && methods.includes('POST')) {
@@ -122,6 +123,8 @@ async function bootstrap(): Promise<void> {
           timeWindow: config.get('RATE_LIMIT_WINDOW_MS'),
         },
       };
+    } else if (route.url === '/api/investor/kyc' && methods.includes('POST')) {
+      route.bodyLimit = kycBodyLimit;
     }
   });
 
